@@ -18,6 +18,30 @@ const CalendarIcon = mk('📅'), PlusIcon = mk('+'), EyeIcon = mk('👁'),
   DlIcon = mk('↓'), BanIcon = mk('⊘'), UserIcon = mk('👤'), TagIcon = mk('🏷');
 
 /* ── Constants ──────────────────────────────────────────────────────────────── */
+const JOB_CATEGORIES = [
+  'Content Portfolio (รับมอบบ้าน / บ้านสวย)',
+  'VDO Social (FB, IG, LINE, Web, iPad)',
+  'Website Improvement (CI AB ส่งโซน)',
+  'VDO บ้านระหว่างก่อสร้าง / พาตรวจบ้าน',
+  'Creative Content (YouTube, TikTok)',
+  'งานอื่นๆ',
+];
+
+const MONTHLY_TARGETS = {
+  'Content Portfolio (รับมอบบ้าน / บ้านสวย)': 20,
+  'VDO Social (FB, IG, LINE, Web, iPad)':       12,
+  'Website Improvement (CI AB ส่งโซน)':          5,
+  'VDO บ้านระหว่างก่อสร้าง / พาตรวจบ้าน':        8,
+  'Creative Content (YouTube, TikTok)':           4,
+  'งานอื่นๆ':                                    10,
+};
+
+const VIDEO_SLA = new Set([
+  'Video – Cut / ตัดต่อ Footage',
+  'Video – Motion Graphic / Animation',
+  'Video – Full Production',
+]);
+
 const BRANDS = [
   { name: 'All Brands',  color: 'bg-slate-800'   },
   { name: 'Landy Home',  color: 'bg-red-600'     },
@@ -417,6 +441,9 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
 }
 
 function DashboardSection({ theme, tickets, filterBrand, onExport }) {
+  const [dashTab,     setDashTab]     = useState('overview');
+  const [monthOffset, setMonthOffset] = useState(0);
+
   const kpi    = useMemo(() => calcKPIs(tickets), [tickets]);
   const counts = useMemo(() => ({
     total:      tickets.length,
@@ -424,6 +451,51 @@ function DashboardSection({ theme, tickets, filterBrand, onExport }) {
     review:     tickets.filter(t => t.status === 'Reviewing').length,
     incomplete: tickets.filter(t => t.status === 'IncompleteRejected').length,
   }), [tickets]);
+
+  /* ── Monthly KPI helpers ── */
+  const selectedMonth = useMemo(() => {
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + monthOffset);
+    return d;
+  }, [monthOffset]);
+
+  const monthLabel = selectedMonth.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+
+  const monthTickets = useMemo(() => {
+    const y = selectedMonth.getFullYear();
+    const m = selectedMonth.getMonth();
+    return tickets.filter(t => {
+      const d = new Date(t.createdAt);
+      return d.getFullYear() === y && d.getMonth() === m;
+    });
+  }, [tickets, selectedMonth]);
+
+  const deliveryKPI = useMemo(() => {
+    const done = monthTickets.filter(t => t.status === 'Done');
+    const artDone = done.filter(t => !VIDEO_SLA.has(t.slaType));
+    const vidDone = done.filter(t =>  VIDEO_SLA.has(t.slaType));
+    const onTime = (arr) => arr.filter(t => t.completedAt && t.dueDate && t.completedAt <= t.dueDate).length;
+    return {
+      artRate:  artDone.length ? Math.round(onTime(artDone) / artDone.length * 100) : null,
+      vidRate:  vidDone.length ? Math.round(onTime(vidDone) / vidDone.length * 100) : null,
+      artCount: artDone.length,
+      vidCount: vidDone.length,
+    };
+  }, [monthTickets]);
+
+  const categoryVolume = useMemo(() =>
+    JOB_CATEGORIES.map(cat => {
+      const all  = monthTickets.filter(t => t.jobCategory === cat);
+      const done = all.filter(t => t.status === 'Done').length;
+      const target = MONTHLY_TARGETS[cat] || 10;
+      return { cat, done, total: all.length, target, pct: Math.min(Math.round(done / target * 100), 100) };
+    })
+  , [monthTickets]);
+
+  const overallDone   = categoryVolume.reduce((s, c) => s + c.done, 0);
+  const overallTarget = categoryVolume.reduce((s, c) => s + c.target, 0);
+  const overallPct    = Math.min(Math.round(overallDone / overallTarget * 100), 100);
 
   return (
     <div className={`space-y-8 rounded-[2rem] p-4 md:p-6 ${theme.pageBg}`}>
@@ -440,7 +512,18 @@ function DashboardSection({ theme, tickets, filterBrand, onExport }) {
         </button>
       </div>
 
-      <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* Sub-tabs */}
+      <div className="flex gap-2">
+        {[['overview','ภาพรวม KPI'],['monthly','Monthly Summary']].map(([id,label]) => (
+          <button key={id} onClick={() => setDashTab(id)}
+            className={`px-5 py-2.5 rounded-2xl text-sm font-bold border transition ${dashTab === id ? `${theme.button} text-white border-transparent` : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── OVERVIEW TAB ── */}
+      {dashTab === 'overview' && <><div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className={`${theme.panelBg} rounded-3xl border ${theme.panelBorder} p-1`}><StatCard title="Total Tickets"  value={counts.total}      hint="ทั้งหมดในระบบ"          icon={FileIcon}  accent={theme.text} /></div>
         <div className={`${theme.panelBg} rounded-3xl border ${theme.panelBorder} p-1`}><StatCard title="Done"           value={counts.done}       hint="ปิดงานแล้ว"             icon={CheckIcon} accent={theme.text} /></div>
         <div className={`${theme.panelBg} rounded-3xl border ${theme.panelBorder} p-1`}><StatCard title="Pending Review" value={counts.review}     hint="รออนุมัติ"              icon={EyeIcon}   accent={theme.text} /></div>
@@ -516,6 +599,95 @@ function DashboardSection({ theme, tickets, filterBrand, onExport }) {
           </div>
         </div>
       </div>
+      </>}
+
+      {/* ── MONTHLY SUMMARY TAB ── */}
+      {dashTab === 'monthly' && (
+        <div className="space-y-8">
+          {/* Month selector */}
+          <div className="flex items-center gap-3">
+            <button onClick={() => setMonthOffset(o => o-1)} className="w-9 h-9 rounded-2xl border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50"><ChevLeft /></button>
+            <div className="text-lg font-black">{monthLabel}</div>
+            <button onClick={() => setMonthOffset(o => o+1)} className="w-9 h-9 rounded-2xl border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50"><ChevRight /></button>
+            {monthOffset !== 0 && <button onClick={() => setMonthOffset(0)} className="text-xs text-slate-400 underline">กลับเดือนนี้</button>}
+          </div>
+
+          {/* Content Delivery Rate */}
+          <div>
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Content Delivery Rate — เป้าหมาย 100%</div>
+            <div className="grid md:grid-cols-2 gap-4">
+              {[
+                { label: 'Artwork Delivery', rate: deliveryKPI.artRate, count: deliveryKPI.artCount, color: 'bg-blue-500' },
+                { label: 'Video Delivery',   rate: deliveryKPI.vidRate, count: deliveryKPI.vidCount, color: 'bg-violet-500' },
+              ].map(({ label, rate, count, color }) => (
+                <div key={label} className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">{label}</div>
+                  {rate === null ? (
+                    <div className="text-2xl font-black text-slate-300">— <span className="text-sm font-normal">ยังไม่มีข้อมูล</span></div>
+                  ) : (
+                    <>
+                      <div className={`text-4xl font-black mt-1 ${rate === 100 ? 'text-green-600' : rate >= 80 ? 'text-amber-600' : 'text-red-600'}`}>{rate}%</div>
+                      <div className="mt-3 h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div className={`h-full rounded-full ${color}`} style={{ width:`${rate}%`, transition:'width 0.5s' }} />
+                      </div>
+                      <div className="text-xs text-slate-400 mt-2">{count} งานที่ Done ในเดือนนี้</div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Monthly Scorecard */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Monthly Scorecard — จำนวนงานจริง vs เป้าหมาย</div>
+              <div className={`text-xs font-bold px-3 py-1 rounded-full ${overallPct >= 100 ? 'bg-green-100 text-green-700' : overallPct >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-600'}`}>
+                รวม {overallDone} / {overallTarget} งาน ({overallPct}%)
+              </div>
+            </div>
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-5">
+              {categoryVolume.map(({ cat, done, total, target, pct }) => (
+                <div key={cat}>
+                  <div className="flex items-center justify-between text-sm mb-1.5">
+                    <span className="font-bold text-slate-700 flex-1 min-w-0 truncate pr-2">{cat}</span>
+                    <div className="shrink-0 flex items-center gap-2 text-xs">
+                      <span className={`font-black ${pct >= 100 ? 'text-green-600' : pct >= 70 ? 'text-amber-600' : 'text-slate-400'}`}>{done}</span>
+                      <span className="text-slate-300">/</span>
+                      <span className="text-slate-400">{target} เป้า</span>
+                      <span className={`ml-1 font-bold px-2 py-0.5 rounded-full text-[10px] ${pct >= 100 ? 'bg-green-100 text-green-700' : pct >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{pct}%</span>
+                    </div>
+                  </div>
+                  <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${pct >= 100 ? 'bg-green-500' : pct >= 70 ? 'bg-amber-400' : 'bg-blue-400'}`}
+                      style={{ width:`${pct}%` }}
+                    />
+                  </div>
+                  {total > done && <div className="text-[10px] text-slate-400 mt-1">{total - done} งานยังไม่ Done</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Production Volume detail */}
+          <div>
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Production Volume — รายละเอียดงานเดือนนี้</div>
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {categoryVolume.map(({ cat, done, total }) => (
+                <div key={cat} className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 line-clamp-2">{cat}</div>
+                  <div className="text-3xl font-black text-slate-900">{total} <span className="text-slate-300 text-lg font-normal">งาน</span></div>
+                  <div className="flex items-center gap-3 mt-2 text-xs">
+                    <span className="text-green-600 font-bold">✓ Done {done}</span>
+                    <span className="text-slate-400">· In Progress {total - done}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -529,6 +701,7 @@ const defaultNewJob = () => ({
   reportLink: '', isDirectionChange: false, parentTicketId: '',
   directorApproved: false,
   urgentReason: '', headApproved: false,
+  jobCategory: JOB_CATEGORIES[0],
 });
 
 /* ── Main Component ─────────────────────────────────────────────────────────── */
@@ -676,9 +849,16 @@ export default function App() {
     return fmtDateInput(d.getTime());
   }, [selectedSla]);
 
-  /* Workload warning for selected assignee */
-  const assigneeWl = workloadByGraphic[newJob.assignee];
-  const assigneeOverloaded = assigneeWl && (assigneeWl.count >= 4 || assigneeWl.hours >= 8);
+  /* Workload warning: เช็คเฉพาะวันที่เลือก (ไม่เตือนทันทีก่อนเลือกวัน) */
+  const selectedDateWorkload = useMemo(() => {
+    if (!newJob.dueDate || !newJob.assignee) return 0;
+    const selDate = new Date(newJob.dueDate).toDateString();
+    return tickets
+      .filter(t => t.assignee === newJob.assignee && t.status !== 'Done' && t.dueDate
+        && new Date(t.dueDate).toDateString() === selDate)
+      .reduce((s, t) => s + (t.standardHours || 0), 0);
+  }, [tickets, newJob.assignee, newJob.dueDate]);
+  const assigneeOverloaded = newJob.dueDate && selectedDateWorkload >= 8;
 
   /* ── Create new ticket ────────────────────────────────────────────────────── */
   const createJob = async (e) => {
@@ -731,6 +911,7 @@ export default function App() {
       parentTicketId: newJob.parentTicketId || null,
       incompleteRejectReason: null,
       urgentReason:   newJob.priority === 1 ? newJob.urgentReason : null,
+      jobCategory:    newJob.jobCategory,
     });
 
     setJob(defaultNewJob());
@@ -739,9 +920,9 @@ export default function App() {
 
   /* ── Export CSV ───────────────────────────────────────────────────────────── */
   const exportCsv = () => {
-    const headers = ['ลำดับ','Job No','วันที่ Request','Brand','Priority','เรื่อง','Objective','Platform','Size/Format','ผู้สั่งงาน','ผู้อนุมัติ','Graphic','ประเภทงาน','SLA std(h)','สถานะ','Deadline','วันที่เริ่ม','วันที่ Approve','เวลาทำงาน','รอบแก้','On-Time','Direction Change','Brief ไม่ครบ','เหตุผลด่วน','Report Link'];
+    const headers = ['ลำดับ','Job No','วันที่ Request','Brand','หมวดหมู่งาน','Priority','เรื่อง','Objective','Platform','Size/Format','ผู้สั่งงาน','ผู้อนุมัติ','Graphic','ประเภทงาน','SLA std(h)','สถานะ','Deadline','วันที่เริ่ม','วันที่ Approve','เวลาทำงาน','รอบแก้','On-Time','Direction Change','Brief ไม่ครบ','เหตุผลด่วน','Report Link'];
     const rows = filtered.map((t, i) => [
-      i+1, t.jobNo||t.id, fmtDate(t.createdAt), t.brand, (PC[t.priority]||PC[3]).label,
+      i+1, t.jobNo||t.id, fmtDate(t.createdAt), t.brand, t.jobCategory||'-', (PC[t.priority]||PC[3]).label,
       t.title, t.objective||'', t.platform||'', t.sizeFormat||'',
       t.requester||'', t.approverName||'',
       GRAPHICS.find(g => g.id === t.assignee)?.name||'-',
@@ -1022,7 +1203,7 @@ export default function App() {
                         })}
                       </select>
                       {assigneeOverloaded && (
-                        <p className="text-xs text-red-600 mt-1 font-bold">⚠ Graphic ท่านนี้งานเต็มมือแล้ว ({assigneeWl.count} งาน / {assigneeWl.hours.toFixed(1)}h) — หากสั่งแทรกอาจกระทบงานอื่น</p>
+                        <p className="text-xs text-red-600 mt-1 font-bold">⚠ วันที่เลือก ({newJob.dueDate}) งานเต็ม {selectedDateWorkload.toFixed(1)}h / 8h แล้ว — หากสั่งแทรกอาจกระทบงานอื่น</p>
                       )}
                     </div>
                     <div>
@@ -1048,6 +1229,16 @@ export default function App() {
                         </label>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Job Category */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">หมวดหมู่งาน (Job Category) <span className="text-red-500">*</span></label>
+                    <select value={newJob.jobCategory} onChange={e => setJob({...newJob, jobCategory:e.target.value})}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                      {JOB_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <p className="text-[10px] text-slate-400 mt-1">ใช้สำหรับคำนวณ Monthly KPI Dashboard</p>
                   </div>
 
                   {/* P1 urgent protection */}
@@ -1210,7 +1401,7 @@ export default function App() {
                 <div className="bg-white rounded-3xl border border-slate-200 p-5">
                   <div className="font-black text-slate-900 mb-3">Brief Checklist</div>
                   <div className="space-y-1.5 text-sm">
-                    {[['ชื่องาน','title'],['Brand','brand'],['ประเภทงาน','slaType'],['Priority','priority'],['Target Deadline','dueDate'],['Objective','objective'],['ขนาด/Format','sizeFormat'],['ชื่อผู้สั่งงาน','requester']].map(([label,key]) => {
+                    {[['ชื่องาน','title'],['Brand','brand'],['หมวดหมู่งาน','jobCategory'],['ประเภทงาน','slaType'],['Priority','priority'],['Target Deadline','dueDate'],['Objective','objective'],['ขนาด/Format','sizeFormat'],['ชื่อผู้สั่งงาน','requester']].map(([label,key]) => {
                       const val    = newJob[key];
                       const filled = key === 'priority' ? true : val && String(val).trim() !== '';
                       return (
