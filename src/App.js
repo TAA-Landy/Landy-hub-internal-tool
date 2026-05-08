@@ -241,9 +241,6 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
   const pConf        = PC[ticket.priority] || PC[3];
   const assigneeName = GRAPHICS.find(g => g.id === ticket.assignee)?.name || '-';
 
-  /* Workload warning for the assigned graphic */
-  const assigneeActiveHours = 0; // computed outside, passed if needed
-
   return (
     <div className={`bg-white rounded-3xl border p-6 shadow-sm hover:shadow-md transition-shadow
       ${ticket.status === 'IncompleteRejected' ? 'border-orange-300' : isLate ? 'border-red-400' : ticket.priority === 1 ? 'border-red-300' : 'border-slate-200'}`}>
