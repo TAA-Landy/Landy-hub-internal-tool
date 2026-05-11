@@ -1,10 +1,13 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { db, storage } from './firebase';
+import { db } from './firebase';
 import {
   collection, onSnapshot, addDoc, updateDoc,
   deleteDoc, doc, deleteField, query, orderBy,
 } from 'firebase/firestore';
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+
+/* ── Cloudinary (free file upload — no Firebase Storage needed) ── */
+const CLOUDINARY_CLOUD  = 'denqjqqly';
+const CLOUDINARY_PRESET = 'landy_hub';
 
 /* ── Icons ─────────────────────────────────────────────────────────────────── */
 const mk = (ch) => ({ className = '' }) =>
@@ -727,21 +730,29 @@ export default function App() {
   const handleFileUpload = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const allowed = ['image/jpeg','image/png','application/pdf'];
+    const allowed = ['image/jpeg','image/jpg','image/png','application/pdf'];
     if (!allowed.includes(file.type)) { alert('รองรับเฉพาะ JPG, PNG, PDF'); return; }
     if (file.size > 20 * 1024 * 1024)  { alert('ไฟล์ต้องไม่เกิน 20 MB'); return; }
     setUpload(0);
-    const sRef    = storageRef(storage, `attachments/${Date.now()}_${file.name}`);
-    const task    = uploadBytesResumable(sRef, file);
-    task.on('state_changed',
-      (snap) => setUpload(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
-      ()     => setUpload('error'),
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        setJob(prev => ({ ...prev, attachment: url }));
-        setUpload('done');
-      }
-    );
+    const fd = new FormData();
+    fd.append('file',         file);
+    fd.append('upload_preset', CLOUDINARY_PRESET);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) setUpload(Math.round(ev.loaded / ev.total * 100));
+    };
+    xhr.onload = () => {
+      try {
+        const res = JSON.parse(xhr.responseText);
+        if (res.secure_url) {
+          setJob(prev => ({ ...prev, attachment: res.secure_url }));
+          setUpload('done');
+        } else { setUpload('error'); }
+      } catch { setUpload('error'); }
+    };
+    xhr.onerror = () => setUpload('error');
+    xhr.send(fd);
   }, []);
 
   /* Real-time Firestore listener */
