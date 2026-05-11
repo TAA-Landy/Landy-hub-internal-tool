@@ -259,9 +259,37 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
   const [link,         setLink]         = useState('');
   const [fb,           setFb]           = useState('');
   const [rejectReason, setRejectReason] = useState('');
+  const [cardUpload,   setCardUpload]   = useState(null); // null | number | 'done' | 'error'
+  const cardFileRef = useRef(null);
 
   useEffect(() => { setLink(ticket.attachment || ''); },          [ticket.attachment]);
   useEffect(() => { setFb(ticket.feedback || ''); },              [ticket.feedback, ticket.status]);
+
+  const handleCardFile = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const allowed = ['image/jpeg','image/jpg','image/png','application/pdf'];
+    if (!allowed.includes(file.type)) { alert('รองรับเฉพาะ JPG, PNG, PDF'); return; }
+    if (file.size > 20 * 1024 * 1024) { alert('ไฟล์ต้องไม่เกิน 20 MB'); return; }
+    setCardUpload(0);
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('upload_preset', CLOUDINARY_PRESET);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) setCardUpload(Math.round(ev.loaded / ev.total * 100));
+    };
+    xhr.onload = () => {
+      try {
+        const res = JSON.parse(xhr.responseText);
+        if (res.secure_url) { setLink(res.secure_url); setCardUpload('done'); }
+        else setCardUpload('error');
+      } catch { setCardUpload('error'); }
+    };
+    xhr.onerror = () => setCardUpload('error');
+    xhr.send(fd);
+  }, []);
   useEffect(() => { setRejectReason(''); },                       [ticket.status]);
 
   const sla          = getSla(ticket.slaType);
@@ -324,11 +352,56 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
       )}
 
       {ticket.status === 'Doing' && (
-        <div className="mt-4 space-y-1">
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">Final Artwork Link</label>
-          <input value={link} onChange={e => setLink(e.target.value)} placeholder="ใส่ลิงก์งานที่ทำเสร็จ (Drive / Figma ฯลฯ)"
-            className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-100" />
-          {link && !validLink(link) && <p className="text-xs text-red-500">ต้องขึ้นต้นด้วย http:// หรือ https://</p>}
+        <div className="mt-4 space-y-2">
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">Final Artwork — แนบไฟล์หรือลิงก์</label>
+
+          {/* Upload zone */}
+          <div
+            onClick={() => cardFileRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCardFile({ target:{ files: e.dataTransfer.files } }); }}
+            className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 hover:border-blue-300 transition bg-slate-50 px-4 py-4 text-center"
+          >
+            <input ref={cardFileRef} type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={handleCardFile} />
+            {cardUpload === null && !link && (
+              <div className="text-xs text-slate-400">
+                <span className="text-lg">📎</span><br/>
+                ลากไฟล์มาวาง หรือคลิกเพื่อเลือก · JPG, PNG, PDF ≤ 20MB
+              </div>
+            )}
+            {typeof cardUpload === 'number' && (
+              <div>
+                <div className="text-xs font-bold text-blue-600 mb-1.5">กำลังอัปโหลด {cardUpload}%</div>
+                <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                  <div className="h-full bg-blue-500 rounded-full" style={{ width:`${cardUpload}%` }} />
+                </div>
+              </div>
+            )}
+            {cardUpload === 'done' && link && (
+              <div className="flex items-center justify-center gap-2 text-green-700 text-xs">
+                <span>✓ อัปโหลดสำเร็จ</span>
+                <a href={link} target="_blank" rel="noreferrer" className="underline text-blue-600" onClick={e => e.stopPropagation()}>ดูไฟล์</a>
+                <button type="button" className="text-slate-400 hover:text-red-500 underline"
+                  onClick={e => { e.stopPropagation(); setLink(''); setCardUpload(null); }}>ลบ</button>
+              </div>
+            )}
+            {cardUpload === 'error' && <div className="text-red-500 text-xs font-bold">⚠ อัปโหลดไม่สำเร็จ — กดเพื่อลองใหม่</div>}
+          </div>
+
+          {/* OR link */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-[10px] text-slate-400 font-bold">หรือ</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+          <input
+            value={cardUpload === 'done' ? '' : link}
+            onChange={e => { setLink(e.target.value); setCardUpload(null); }}
+            placeholder="วาง Google Drive / Figma link..."
+            disabled={cardUpload === 'done'}
+            className="w-full rounded-2xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400"
+          />
+          {link && cardUpload !== 'done' && !validLink(link) && <p className="text-xs text-red-500">ต้องขึ้นต้นด้วย http:// หรือ https://</p>}
         </div>
       )}
 
