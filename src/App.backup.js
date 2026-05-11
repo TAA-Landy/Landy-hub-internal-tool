@@ -1,10 +1,9 @@
-import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { db, storage } from './firebase';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import { db } from './firebase';
 import {
   collection, onSnapshot, addDoc, updateDoc,
   deleteDoc, doc, deleteField, query, orderBy,
 } from 'firebase/firestore';
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 
 /* ── Icons ─────────────────────────────────────────────────────────────────── */
 const mk = (ch) => ({ className = '' }) =>
@@ -51,7 +50,6 @@ const BRANDS = [
   { name: 'Capplus',     color: 'bg-sky-500'     },
   { name: 'Rudolf',      color: 'bg-emerald-400' },
   { name: 'MM',          color: 'bg-violet-500'  },
-  { name: 'CR',          color: 'bg-teal-500'    },
 ];
 
 const SLA_TYPES = [
@@ -81,7 +79,6 @@ const GRAPHICS = [
   { id: 'B04', name: 'Capplus'     },
   { id: 'B05', name: 'Rudolf'      },
   { id: 'B06', name: 'MM'          },
-  { id: 'B07', name: 'CR'          },
 ];
 
 const PC = {
@@ -98,7 +95,6 @@ const BRAND_THEMES = {
   'Capplus':     { pageBg:'bg-sky-50',     panelBg:'bg-white', panelBorder:'border-sky-200',     softBg:'bg-sky-50',     text:'text-sky-700',    button:'bg-sky-500',    buttonHover:'hover:bg-sky-600'    },
   'Rudolf':      { pageBg:'bg-emerald-50', panelBg:'bg-white', panelBorder:'border-emerald-200', softBg:'bg-emerald-50', text:'text-emerald-700',button:'bg-emerald-400',buttonHover:'hover:bg-emerald-500' },
   'MM':          { pageBg:'bg-violet-50',  panelBg:'bg-white', panelBorder:'border-violet-200',  softBg:'bg-violet-50',  text:'text-violet-700', button:'bg-violet-500', buttonHover:'hover:bg-violet-600' },
-  'CR':          { pageBg:'bg-teal-50',    panelBg:'bg-white', panelBorder:'border-teal-200',    softBg:'bg-teal-50',    text:'text-teal-700',   button:'bg-teal-500',   buttonHover:'hover:bg-teal-600'   },
 };
 
 /* ── Utilities ──────────────────────────────────────────────────────────────── */
@@ -718,31 +714,9 @@ export default function App() {
   const [brandViewBrand, setBVBrand] = useState('Landy Home');
   const [graphicViewId,  setGVId]   = useState('B01');
   const [search,     setSearch] = useState('');
-  const [newJob,       setJob]       = useState(defaultNewJob);
-  const [now,          setNow]       = useState(Date.now());
-  const [weekOffset,   setWeek]      = useState(0);
-  const [uploadState,  setUpload]    = useState(null); // null | number(%) | 'done' | 'error'
-  const fileInputRef = useRef(null);
-
-  const handleFileUpload = useCallback((e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const allowed = ['image/jpeg','image/png','application/pdf'];
-    if (!allowed.includes(file.type)) { alert('รองรับเฉพาะ JPG, PNG, PDF'); return; }
-    if (file.size > 20 * 1024 * 1024)  { alert('ไฟล์ต้องไม่เกิน 20 MB'); return; }
-    setUpload(0);
-    const sRef    = storageRef(storage, `attachments/${Date.now()}_${file.name}`);
-    const task    = uploadBytesResumable(sRef, file);
-    task.on('state_changed',
-      (snap) => setUpload(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
-      ()     => setUpload('error'),
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        setJob(prev => ({ ...prev, attachment: url }));
-        setUpload('done');
-      }
-    );
-  }, []);
+  const [newJob,     setJob]    = useState(defaultNewJob);
+  const [now,        setNow]    = useState(Date.now());
+  const [weekOffset, setWeek]   = useState(0);
 
   /* Real-time Firestore listener */
   useEffect(() => {
@@ -795,17 +769,13 @@ export default function App() {
 
   const dashTheme = useMemo(() => getTheme(filterBrand), [filterBrand]);
 
-  const calDays = useMemo(() => {
-    const today = new Date();
-    const sunday = new Date(today);
-    sunday.setDate(today.getDate() - today.getDay() + weekOffset * 7); // เริ่มจาก อาทิตย์
-    sunday.setHours(0, 0, 0, 0);
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(sunday);
-      d.setDate(sunday.getDate() + i);
+  const calDays = useMemo(() =>
+    Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() + weekOffset * 7 + i - 2);
       return d;
-    });
-  }, [weekOffset]);
+    })
+  , [weekOffset]);
 
   const jobsByCell = useMemo(() => {
     const map = new Map();
@@ -866,14 +836,9 @@ export default function App() {
     await updateDoc(ticketRef, updates);
   }, [tickets]);
 
-  /* ── Deadline validation — ตัดที่ 18:00 ของวันที่เลือก ไม่ใช่ midnight ── */
+  /* ── Deadline validation ──────────────────────────────────────────────────── */
   const selectedSla = useMemo(() => getSla(newJob.slaType), [newJob.slaType]);
-  const dueDateMs   = useMemo(() => {
-    if (!newJob.dueDate) return 0;
-    const d = new Date(newJob.dueDate);
-    d.setHours(18, 0, 0, 0); // ถือว่าสิ้นสุดวันทำการที่ 18:00
-    return d.getTime();
-  }, [newJob.dueDate]);
+  const dueDateMs   = newJob.dueDate ? new Date(newJob.dueDate).getTime() : 0;
   const hoursLeft   = dueDateMs ? (dueDateMs - Date.now()) / 3600000 : 0;
   const belowMin    = dueDateMs > 0 && hoursLeft < selectedSla.minHours;
   const belowStd    = dueDateMs > 0 && hoursLeft < selectedSla.stdHours && !belowMin;
@@ -950,7 +915,6 @@ export default function App() {
     });
 
     setJob(defaultNewJob());
-    setUpload(null);
     setTab('graphic');
   };
 
@@ -1393,54 +1357,11 @@ export default function App() {
                     <LinkIcon className="w-4 h-4" /> References & Revision
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">Reference / Concept / Mood Board</label>
-
-                    {/* Upload zone */}
-                    <div
-                      onClick={() => fileInputRef.current?.click()}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { fileInputRef.current.files = e.dataTransfer.files; handleFileUpload({ target: { files: e.dataTransfer.files } }); } }}
-                      className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 hover:border-red-300 transition bg-slate-50 px-4 py-5 text-center"
-                    >
-                      <input ref={fileInputRef} type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={handleFileUpload} />
-                      {uploadState === null && !newJob.attachment && (
-                        <div>
-                          <div className="text-2xl mb-1">📎</div>
-                          <div className="text-sm font-bold text-slate-500">ลากไฟล์มาวางที่นี่ หรือคลิกเพื่อเลือก</div>
-                          <div className="text-xs text-slate-400 mt-1">รองรับ JPG, PNG, PDF · ไม่เกิน 20 MB</div>
-                        </div>
-                      )}
-                      {typeof uploadState === 'number' && (
-                        <div>
-                          <div className="text-sm font-bold text-blue-600 mb-2">กำลังอัปโหลด {uploadState}%</div>
-                          <div className="h-2 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all" style={{ width:`${uploadState}%` }} /></div>
-                        </div>
-                      )}
-                      {uploadState === 'done' && newJob.attachment && (
-                        <div className="flex items-center justify-center gap-2 text-green-700">
-                          <span className="text-xl">✓</span>
-                          <span className="text-sm font-bold">อัปโหลดสำเร็จ</span>
-                          <a href={newJob.attachment} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs" onClick={e => e.stopPropagation()}>ดูไฟล์</a>
-                          <button type="button" className="text-slate-400 hover:text-red-500 text-xs underline" onClick={e => { e.stopPropagation(); setJob({...newJob, attachment:''}); setUpload(null); }}>ลบ</button>
-                        </div>
-                      )}
-                      {uploadState === 'error' && <div className="text-red-500 text-sm font-bold">⚠ อัปโหลดไม่สำเร็จ กดเพื่อลองใหม่</div>}
-                    </div>
-
-                    {/* OR: paste a link */}
-                    <div className="flex items-center gap-3 my-3">
-                      <div className="flex-1 h-px bg-slate-200" />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">หรือใส่ลิงก์</span>
-                      <div className="flex-1 h-px bg-slate-200" />
-                    </div>
-                    <input
-                      value={uploadState === 'done' ? '' : (newJob.attachment || '')}
-                      onChange={e => { setJob({...newJob, attachment:e.target.value}); setUpload(null); }}
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Reference / Concept / Mood Board Link</label>
+                    <input value={newJob.attachment} onChange={e => setJob({...newJob, attachment:e.target.value})}
                       placeholder="https://drive.google.com/... หรือ Figma link"
-                      disabled={uploadState === 'done'}
-                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 disabled:bg-slate-50 disabled:text-slate-400"
-                    />
-                    {newJob.attachment && uploadState !== 'done' && !validLink(newJob.attachment) && <p className="text-xs text-red-500 mt-1">ต้องขึ้นต้นด้วย https://</p>}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+                    {newJob.attachment && !validLink(newJob.attachment) && <p className="text-xs text-red-500 mt-1">ต้องขึ้นต้นด้วย https://</p>}
                   </div>
                   <label className="flex items-center gap-3 rounded-2xl border border-purple-200 bg-purple-50 px-4 py-3 cursor-pointer">
                     <input type="checkbox" checked={newJob.isDirectionChange} onChange={e => setJob({...newJob, isDirectionChange:e.target.checked})} />

@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore"; // ต้องมีบรรทัดนี้เพื่อใช้ Database
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyA57mh160VsT0aG-bjwV5tYXJIVUHB2Gmo",
@@ -11,8 +12,7 @@ const firebaseConfig = {
   measurementId: "G-BCLQQ47MGF"
 };
 
-// เริ่มต้น Firebase
 const app = initializeApp(firebaseConfig);
 
-// ส่งออกตัวแปร db ไปให้ไฟล์อื่นใช้งาน
-export const db = getFirestore(app);
+export const db      = getFirestore(app);
+export const storage = getStorage(app);
