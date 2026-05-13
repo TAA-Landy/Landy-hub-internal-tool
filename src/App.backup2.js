@@ -258,13 +258,12 @@ function KPICard({ title, value, target, unit = '%', higherGood = true, monitorO
 function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
   const [link,         setLink]         = useState('');
   const [fb,           setFb]           = useState('');
-  const [fbError,      setFbError]      = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [cardUpload,   setCardUpload]   = useState(null); // null | number | 'done' | 'error'
   const cardFileRef = useRef(null);
 
   useEffect(() => { setLink(ticket.attachment || ''); },          [ticket.attachment]);
-  useEffect(() => { setFb(ticket.feedback || ''); setFbError(''); }, [ticket.feedback, ticket.status]);
+  useEffect(() => { setFb(ticket.feedback || ''); },              [ticket.feedback, ticket.status]);
 
   const handleCardFile = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -453,20 +452,15 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
         <span className="text-xs text-slate-500">{assigneeName} · Rev {ticket.revisions}x</span>
       </div>
 
-      {ticket.status === 'Reviewing' && (
+      {showReviewFields && ticket.status === 'Reviewing' && (
         <div className="mt-4 space-y-1">
-          <label className={`block text-[10px] font-bold uppercase tracking-widest ${fbError ? 'text-red-500' : 'text-slate-400'}`}>
-            Feedback / เหตุผล <span className="text-red-500">*</span> จำเป็นสำหรับ Reject
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            Feedback — ระบุ อะไร / ที่ไหน / แก้เป็นอะไร
           </label>
-          <textarea
-            value={fb}
-            onChange={e => { setFb(e.target.value); if (e.target.value.trim()) setFbError(''); }}
-            rows={3}
-            placeholder="ระบุ อะไร / ที่ไหน / แก้เป็นอะไร — เช่น: headline บรรทัดแรก เปลี่ยนจาก 'Healthy' → 'สุขภาพดี'"
-            className={`w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 ${fbError ? 'border-red-400 focus:ring-red-100 bg-red-50' : 'border-slate-200 focus:ring-blue-100'}`}
-          />
-          {fbError && <p className="text-xs text-red-600 font-bold">{fbError}</p>}
-          <p className="text-[10px] text-slate-400">รวม feedback จากทุก stakeholder ก่อนส่ง · ห้ามทยอยส่งหลายรอบ</p>
+          <textarea value={fb} onChange={e => setFb(e.target.value)} rows={3}
+            placeholder="เช่น: headline บรรทัดแรก เปลี่ยนจาก 'Healthy' → 'สุขภาพดี' และย้ายโลโก้ไปมุมขวาล่าง"
+            className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-100" />
+          <p className="text-[10px] text-slate-400">รวม feedback จากทุก stakeholder ก่อนส่ง ห้ามทยอยส่งหลายรอบ</p>
         </div>
       )}
 
@@ -511,15 +505,7 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
             className="flex-1 rounded-2xl bg-green-600 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
             <CheckIcon className="w-3 h-3" /> Approve
           </button>
-          <button
-            onClick={() => {
-              if (!fb.trim()) {
-                setFbError('⚠ กรุณาระบุเหตุผลก่อน Reject');
-                return;
-              }
-              setFbError('');
-              onAction(ticket.id, 'reject', { feedback: fb });
-            }}
+          <button onClick={() => onAction(ticket.id, 'reject', { feedback: fb })}
             className="flex-1 rounded-2xl bg-rose-600 text-white py-3 text-xs font-bold uppercase">
             Reject – แก้ใหม่
           </button>
