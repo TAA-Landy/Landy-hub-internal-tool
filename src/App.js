@@ -186,16 +186,16 @@ function addWorkingHours(startMs, hours) {
   return cursor;
 }
 
-/* Calendar event style based on status + late check */
+/* Calendar event style — one distinct colour per status */
 function calEventStyle(ticket, now) {
   const isLate = ticket.dueDate && now > ticket.dueDate && ticket.status !== 'Done';
-  if (ticket.status === 'Done')
-    return 'bg-green-100 border-green-300 text-green-800';
-  if (isLate || ticket.status === 'Reviewing')
-    return 'bg-red-100 border-red-300 text-red-800';
-  if (ticket.status === 'Doing' || ticket.status === 'Paused')
-    return 'bg-blue-100 border-blue-300 text-blue-800';
-  return 'bg-slate-100 border-slate-300 text-slate-700'; // Waiting / IncompleteRejected
+  if (ticket.status === 'Done')               return 'bg-green-100  border-green-300  text-green-800';
+  if (ticket.status === 'Reviewing')          return 'bg-purple-100 border-purple-300 text-purple-800';
+  if (isLate)                                 return 'bg-red-100    border-red-300    text-red-800';
+  if (ticket.status === 'Doing')              return 'bg-blue-100   border-blue-300   text-blue-800';
+  if (ticket.status === 'Paused')             return 'bg-amber-100  border-amber-300  text-amber-800';
+  if (ticket.status === 'IncompleteRejected') return 'bg-orange-100 border-orange-300 text-orange-800';
+  return 'bg-slate-100 border-slate-300 text-slate-700'; // Waiting
 }
 
 function calcKPIs(tickets) {
@@ -378,8 +378,11 @@ function TicketCard({ ticket, onAction, now, viewMode = 'all', onEdit }) {
           <h3 className="font-black text-slate-900 leading-tight">{ticket.title}</h3>
           {ticket.jobNo && <div className="text-[10px] text-slate-400 mt-0.5">{ticket.jobNo}</div>}
           {ticket.parentTicketId && <div className="text-xs text-slate-400 mt-0.5">อ้างอิง: <span className="font-bold text-slate-600">{ticket.parentTicketId}</span></div>}
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1">
-            {ticket.slaType}{ticket.platform ? ` · ${ticket.platform}` : ''}
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1 flex flex-wrap items-center gap-1.5">
+            {ticket.quantity > 1 && (
+              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-black normal-case text-[11px]">×{ticket.quantity}</span>
+            )}
+            <span>{ticket.slaType}{ticket.platform ? ` · ${ticket.platform}` : ''}</span>
           </div>
           {ticket.urgentReason && (
             <div className="mt-2 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-800">
@@ -389,8 +392,8 @@ function TicketCard({ ticket, onAction, now, viewMode = 'all', onEdit }) {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {isRequester && onEdit && ticket.status !== 'Done' && (
-            <button onClick={() => onEdit(ticket)} title="แก้ไข Ticket"
-              className="text-slate-300 hover:text-blue-500 px-1 text-base">
+            <button onClick={() => onEdit(ticket)} aria-label="แก้ไข Ticket"
+              className="text-slate-300 hover:text-blue-500 px-1 py-1 rounded-xl hover:bg-blue-50 transition">
               <EditIcon />
             </button>
           )}
@@ -910,6 +913,7 @@ function EditTicketModal({ ticket, onSave, onClose }) {
     title:        ticket.title        || '',
     brand:        ticket.brand        || '',
     slaType:      ticket.slaType      || '',
+    quantity:     ticket.quantity     || 1,
     priority:     ticket.priority     || 3,
     objective:    ticket.objective    || '',
     platform:     ticket.platform     || '',
@@ -936,13 +940,15 @@ function EditTicketModal({ ticket, onSave, onClose }) {
     const dueDateMs = form.dueDate
       ? (() => { const d = new Date(form.dueDate); d.setHours(18,0,0,0); return d.getTime(); })()
       : ticket.dueDate;
-    const sla = getSla(form.slaType);
+    const sla    = getSla(form.slaType);
+    const editQty = Math.max(1, form.quantity || 1);
     onSave(ticket.id, {
       title:        form.title.trim(),
       brand:        form.brand,
       slaType:      form.slaType,
-      standardHours: sla.stdHours,
-      minHours:     sla.minHours,
+      quantity:     editQty,
+      standardHours: sla.stdHours * editQty,
+      minHours:     sla.minHours  * editQty,
       priority:     form.priority,
       objective:    form.objective.trim(),
       platform:     form.platform     || null,
@@ -1009,6 +1015,19 @@ function EditTicketModal({ ticket, onSave, onClose }) {
                 <option value="">— กรุณาเลือก —</option>
                 {JOB_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">จำนวน (Quantity)</label>
+            <div className="flex items-center gap-2">
+              <button type="button" aria-label="ลด" onClick={() => setForm(f => ({...f, quantity: Math.max(1, (f.quantity||1)-1)}))}
+                className="w-10 h-10 rounded-2xl border border-slate-200 bg-white flex items-center justify-center font-bold text-lg text-slate-600 hover:bg-slate-50 select-none">−</button>
+              <input type="number" min="1" max="99" value={form.quantity || 1}
+                onChange={e => setForm(f => ({...f, quantity: Math.max(1, Math.min(99, parseInt(e.target.value)||1))}))}
+                className="w-20 text-center rounded-2xl border border-slate-200 px-3 py-3 outline-none focus:ring-2 focus:ring-red-100 font-bold" />
+              <button type="button" aria-label="เพิ่ม" onClick={() => setForm(f => ({...f, quantity: Math.min(99, (f.quantity||1)+1)}))}
+                className="w-10 h-10 rounded-2xl border border-slate-200 bg-white flex items-center justify-center font-bold text-lg text-slate-600 hover:bg-slate-50 select-none">+</button>
+              <span className="text-xs text-slate-400">ชิ้น / Post / Clip</span>
             </div>
           </div>
           <div>
@@ -1095,6 +1114,7 @@ const defaultNewJob = () => ({
   directorApproved: false,
   urgentReason: '', headApproved: false,
   jobCategory: '',
+  quantity: 1,
 });
 
 /* ── Main Component ─────────────────────────────────────────────────────────── */
@@ -1208,11 +1228,17 @@ export default function App() {
 
   const jobsByCell = useMemo(() => {
     const map = new Map();
-    for (const t of filtered) {
-      if (!t.dueDate) continue;
-      const key = `${t.assignee}__${new Date(t.dueDate).toDateString()}`;
+    const add = (key, t) => {
       if (!map.has(key)) map.set(key, []);
-      map.get(key).push(t);
+      if (!map.get(key).find(x => x.id === t.id)) map.get(key).push(t);
+    };
+    for (const t of filtered) {
+      // Always place on deadline column
+      if (t.dueDate) add(`${t.assignee}__${new Date(t.dueDate).toDateString()}`, t);
+      // ALSO place Doing / Paused tickets on their actual started-work date
+      if (t.startedAt && (t.status === 'Doing' || t.status === 'Paused')) {
+        add(`${t.assignee}__${new Date(t.startedAt).toDateString()}`, t);
+      }
     }
     return (gid, d) => map.get(`${gid}__${d.toDateString()}`) ?? [];
   }, [filtered]);
@@ -1310,6 +1336,10 @@ export default function App() {
 
   /* ── Deadline validation — ตัดที่ 18:00 ของวันที่เลือก ไม่ใช่ midnight ── */
   const selectedSla = useMemo(() => getSla(newJob.slaType), [newJob.slaType]);
+  const qty         = Math.max(1, newJob.quantity || 1);
+  const totalStdHrs = selectedSla.stdHours * qty;
+  const totalMinHrs = selectedSla.minHours  * qty;
+
   const dueDateMs   = useMemo(() => {
     if (!newJob.dueDate) return 0;
     const d = new Date(newJob.dueDate);
@@ -1317,14 +1347,14 @@ export default function App() {
     return d.getTime();
   }, [newJob.dueDate]);
   const hoursLeft   = dueDateMs ? (dueDateMs - Date.now()) / 3600000 : 0;
-  const belowMin    = dueDateMs > 0 && hoursLeft < selectedSla.minHours;
-  const belowStd    = dueDateMs > 0 && hoursLeft < selectedSla.stdHours && !belowMin;
+  const belowMin    = dueDateMs > 0 && hoursLeft < totalMinHrs;
+  const belowStd    = dueDateMs > 0 && hoursLeft < totalStdHrs && !belowMin;
 
-  /* SLA suggested deadline (working days) */
+  /* SLA suggested deadline (working days × quantity) */
   const suggestedDeadline = useMemo(() => {
-    const d = addWorkingHours(Date.now(), selectedSla.stdHours);
+    const d = addWorkingHours(Date.now(), totalStdHrs);
     return fmtDateInput(d.getTime());
-  }, [selectedSla]);
+  }, [totalStdHrs]);
 
   /* Workload warning: เช็คเฉพาะวันที่เลือก (ไม่เตือนทันทีก่อนเลือกวัน) */
   const selectedDateWorkload = useMemo(() => {
@@ -1355,7 +1385,7 @@ export default function App() {
     if (!newJob.objective.trim())  { alert('กรุณาระบุ Objective'); return; }
     if (!newJob.sizeFormat.trim()) { alert('กรุณาระบุขนาด / Format'); return; }
     if (belowMin && !newJob.directorApproved) {
-      alert('Deadline ต่ำกว่าขั้นต่ำ ต้องได้รับอนุมัติจาก Marketing Director ก่อน');
+      alert(`Deadline ต่ำกว่าขั้นต่ำ (${fmtH(totalMinHrs)} รวม ${qty} ชิ้น) ต้องได้รับอนุมัติจาก Marketing Director ก่อน`);
       return;
     }
     if (newJob.priority === 1) {
@@ -1363,8 +1393,9 @@ export default function App() {
       if (!newJob.headApproved)        { alert('งาน P1 ต้องได้รับอนุมัติจากหัวหน้าฝ่ายก่อน'); return; }
     }
 
-    const sla   = getSla(newJob.slaType);
-    const jobNo = `JOB-${Date.now().toString(36).toUpperCase()}`;
+    const sla      = getSla(newJob.slaType);
+    const jobNo    = `JOB-${Date.now().toString(36).toUpperCase()}`;
+    const jobQty   = Math.max(1, newJob.quantity || 1);
 
     await addDoc(collection(db, 'tickets'), {
       jobNo,
@@ -1373,8 +1404,9 @@ export default function App() {
         : newJob.title,
       brand:          newJob.brand,
       slaType:        newJob.slaType,
-      minHours:       sla.minHours,
-      standardHours:  sla.stdHours,
+      quantity:       jobQty,
+      minHours:       sla.minHours  * jobQty,
+      standardHours:  sla.stdHours  * jobQty,
       priority:       newJob.priority,
       objective:      newJob.objective,
       platform:       newJob.platform       || null,
@@ -1413,13 +1445,13 @@ export default function App() {
 
   /* ── Export CSV ───────────────────────────────────────────────────────────── */
   const exportCsv = () => {
-    const headers = ['ลำดับ','Job No','วันที่ Request','Brand','หมวดหมู่งาน','Priority','เรื่อง','Objective','Platform','Size/Format','ผู้สั่งงาน','ผู้อนุมัติ','Graphic','ประเภทงาน','SLA std(h)','สถานะ','Deadline','วันที่เริ่ม','วันที่ Approve','เวลาทำงาน','รอบแก้','On-Time','Direction Change','Brief ไม่ครบ','เหตุผลด่วน','Report Link'];
+    const headers = ['ลำดับ','Job No','วันที่ Request','Brand','หมวดหมู่งาน','Priority','เรื่อง','Objective','Platform','Size/Format','ผู้สั่งงาน','ผู้อนุมัติ','Graphic','ประเภทงาน','จำนวน','SLA std(h)','สถานะ','Deadline','วันที่เริ่ม','วันที่ Approve','เวลาทำงาน','รอบแก้','On-Time','Direction Change','Brief ไม่ครบ','เหตุผลด่วน','Report Link'];
     const rows = filtered.map((t, i) => [
       i+1, t.jobNo||t.id, fmtDate(t.createdAt), t.brand, t.jobCategory||'-', (PC[t.priority]||PC[3]).label,
       t.title, t.objective||'', t.platform||'', t.sizeFormat||'',
       t.requester||'', t.approverName||'',
       GRAPHICS.find(g => g.id === t.assignee)?.name||'-',
-      t.slaType, t.standardHours, t.status,
+      t.slaType, t.quantity||1, t.standardHours, t.status,
       fmtDate(t.dueDate), fmtDateTime(t.startedAt), fmtDateTime(t.completedAt),
       fmtSec(t.timeSpent), t.revisions,
       t.status==='Done'?(t.completedAt&&t.dueDate&&t.completedAt<=t.dueDate?'Yes':'No'):'-',
@@ -1581,7 +1613,7 @@ export default function App() {
           </div>
         </div>
 
-        <main className="p-5 lg:p-8">
+        <main className="p-5 lg:p-8 pb-20 lg:pb-8">
           {loading && (
             <div className="flex items-center justify-center h-64 text-slate-400 text-sm">
               กำลังโหลดข้อมูลจาก Firestore...
@@ -1604,12 +1636,15 @@ export default function App() {
               </div>
 
               {/* Status color legend */}
-              <div className="flex flex-wrap gap-3 text-xs">
+              <div className="flex flex-wrap gap-2 text-[11px]">
                 {[
-                  { label: 'Waiting',  cls: 'bg-slate-100 border-slate-300 text-slate-700' },
-                  { label: 'Doing / Paused', cls: 'bg-blue-100 border-blue-300 text-blue-800' },
-                  { label: 'Reviewing / Late', cls: 'bg-red-100 border-red-300 text-red-800' },
-                  { label: 'Done',     cls: 'bg-green-100 border-green-300 text-green-800' },
+                  { label: '📥 Waiting',           cls: 'bg-slate-100  border-slate-300  text-slate-700'  },
+                  { label: '▶ Doing',              cls: 'bg-blue-100   border-blue-300   text-blue-800'   },
+                  { label: '⏸ Paused',             cls: 'bg-amber-100  border-amber-300  text-amber-800'  },
+                  { label: '👁 Reviewing',          cls: 'bg-purple-100 border-purple-300 text-purple-800' },
+                  { label: '✓ Done',               cls: 'bg-green-100  border-green-300  text-green-800'  },
+                  { label: '⊘ Waiting Info',       cls: 'bg-orange-100 border-orange-300 text-orange-800' },
+                  { label: '⚠ Late',               cls: 'bg-red-100    border-red-300    text-red-800'    },
                 ].map(s => (
                   <span key={s.label} className={`px-2.5 py-1 rounded-full border font-bold ${s.cls}`}>{s.label}</span>
                 ))}
@@ -1721,7 +1756,31 @@ export default function App() {
                         <option value="">— กรุณาเลือก —</option>
                         {SLA_TYPES.map(s => <option key={s.type} value={s.type}>{s.type}</option>)}
                       </select>
-                      {selectedSla.note && <p className="text-xs text-slate-400 mt-1">{selectedSla.note} · std {fmtH(selectedSla.stdHours)} · min {fmtH(selectedSla.minHours)}</p>}
+                      {selectedSla.note && <p className="text-xs text-slate-400 mt-1">{selectedSla.note} · std {fmtH(selectedSla.stdHours)}/ชิ้น · min {fmtH(selectedSla.minHours)}/ชิ้น</p>}
+                    </div>
+                  </div>
+
+                  {/* Quantity */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      จำนวน (Quantity) <span className="text-red-500">*</span>
+                      <span className="ml-2 text-slate-400 font-normal normal-case">ชิ้น / Post / Clip ในคำสั่งนี้</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <button type="button" aria-label="ลดจำนวน"
+                        onClick={() => setJob({...newJob, quantity: Math.max(1, (newJob.quantity||1) - 1)})}
+                        className="w-10 h-10 rounded-2xl border border-slate-200 bg-white flex items-center justify-center font-bold text-lg text-slate-600 hover:bg-slate-50 active:bg-slate-100 select-none">−</button>
+                      <input type="number" min="1" max="99" value={newJob.quantity || 1}
+                        onChange={e => setJob({...newJob, quantity: Math.max(1, Math.min(99, parseInt(e.target.value) || 1))})}
+                        className="w-20 text-center rounded-2xl border border-slate-200 px-3 py-3 outline-none focus:ring-2 focus:ring-red-100 font-bold" />
+                      <button type="button" aria-label="เพิ่มจำนวน"
+                        onClick={() => setJob({...newJob, quantity: Math.min(99, (newJob.quantity||1) + 1)})}
+                        className="w-10 h-10 rounded-2xl border border-slate-200 bg-white flex items-center justify-center font-bold text-lg text-slate-600 hover:bg-slate-50 active:bg-slate-100 select-none">+</button>
+                      {(newJob.quantity || 1) > 1 && newJob.slaType && (
+                        <span className="text-xs text-blue-600 font-bold">
+                          รวม: std {fmtH(totalStdHrs)} · min {fmtH(totalMinHrs)}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1788,9 +1847,11 @@ export default function App() {
                           setJob({...newJob, dueDate:e.target.value});
                         }}
                         className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
-                      <p className="text-[10px] text-slate-400 mt-1">แนะนำ: {suggestedDeadline} (SLA std นับเฉพาะวันทำการ)</p>
-                      {belowMin && <p className="text-xs text-red-600 mt-1 font-bold">⚠ ต่ำกว่าขั้นต่ำ ({fmtH(selectedSla.minHours)}) — ต้องอนุมัติจาก Marketing Director</p>}
-                      {belowStd && <p className="text-xs text-amber-600 mt-1">⚠ ต่ำกว่าเวลามาตรฐาน ({fmtH(selectedSla.stdHours)}) — อาจกระทบคุณภาพ</p>}
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        แนะนำ: {suggestedDeadline} · SLA รวม std {fmtH(totalStdHrs)}{qty > 1 ? ` (${qty} × ${fmtH(selectedSla.stdHours)})` : ''}
+                      </p>
+                      {belowMin && <p className="text-xs text-red-600 mt-1 font-bold">⚠ ต่ำกว่าขั้นต่ำ ({fmtH(totalMinHrs)}) — ต้องอนุมัติจาก Marketing Director</p>}
+                      {belowStd && <p className="text-xs text-amber-600 mt-1">⚠ ต่ำกว่าเวลามาตรฐาน ({fmtH(totalStdHrs)}) — อาจกระทบคุณภาพ</p>}
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 mb-1">Report Link</label>
@@ -1954,7 +2015,7 @@ export default function App() {
                 <div className="bg-white rounded-3xl border border-slate-200 p-5">
                   <div className="font-black text-slate-900 mb-3">Brief Checklist</div>
                   <div className="space-y-1.5 text-sm">
-                    {[['ชื่องาน','title'],['Brand','brand'],['หมวดหมู่งาน','jobCategory'],['ประเภทงาน','slaType'],['Priority','priority'],['Target Deadline','dueDate'],['Objective','objective'],['ขนาด/Format','sizeFormat'],['ชื่อผู้สั่งงาน','requester']].map(([label,key]) => {
+                    {[['ชื่องาน','title'],['Brand','brand'],['หมวดหมู่งาน','jobCategory'],['ประเภทงาน','slaType'],['จำนวน','quantity'],['Priority','priority'],['Target Deadline','dueDate'],['Objective','objective'],['ขนาด/Format','sizeFormat'],['ชื่อผู้สั่งงาน','requester']].map(([label,key]) => {
                       const val    = newJob[key];
                       const filled = key === 'priority' ? true : val && String(val).trim() !== '';
                       return (
@@ -2105,6 +2166,21 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* ── Mobile bottom nav (visible only on small screens) ── */}
+      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-slate-200 flex lg:hidden">
+        {nav.map(item => {
+          const Icon = item.icon;
+          return (
+            <button key={item.id} onClick={() => setTab(item.id)}
+              aria-label={item.label}
+              className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-[10px] font-bold transition ${tab === item.id ? 'text-red-600' : 'text-slate-400'}`}>
+              <Icon className="w-5 h-5" />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
       {/* ── Edit Ticket Modal ── */}
       {editTicket && (
