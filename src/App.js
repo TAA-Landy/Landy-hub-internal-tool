@@ -9,6 +9,19 @@ import {
 const CLOUDINARY_CLOUD  = 'denqjqqly';
 const CLOUDINARY_PRESET = 'landy_hub';
 
+/* ── EmailJS — ส่ง email จาก browser (Free 200 emails/month) ──────────────
+   วิธีตั้งค่า:
+   1. สมัคร https://www.emailjs.com/
+   2. สร้าง Email Service (Gmail, Outlook ฯลฯ)
+   3. สร้าง Email Template — ตัวแปรที่ใช้: {{subject}}, {{message}}, {{to_email}}
+   4. คัดลอก Service ID / Template ID / Public Key มากรอกด้านล่าง
+   หากยังไม่ตั้งค่า ระบบจะแสดงการแจ้งเตือนใน Console แทน
+*/
+const EJS_SERVICE  = '';   // เช่น 'service_abc123'
+const EJS_TEMPLATE = '';   // เช่น 'template_xyz789'
+const EJS_PUBLIC   = '';   // เช่น 'ABCDEFG_publickey'
+const NOTIFY_EMAIL = '';   // email ปลายทาง เช่น 'graphic@landyhome.co.th'
+
 /* ── Icons ─────────────────────────────────────────────────────────────────── */
 const mk = (ch) => ({ className = '' }) =>
   <span className={`inline-flex items-center justify-center leading-none select-none ${className}`}>{ch}</span>;
@@ -17,7 +30,7 @@ const CalendarIcon = mk('📅'), PlusIcon = mk('+'), EyeIcon = mk('👁'),
   GridIcon = mk('▦'), ChartIcon = mk('▥'), PlayIcon = mk('▶'),
   PauseIcon = mk('Ⅱ'), CheckIcon = mk('✓'), ClockIcon = mk('⏱'),
   FilterIcon = mk('⏷'), SearchIcon = mk('⌕'), AlertIcon = mk('!'),
-  FileIcon = mk('▤'), LinkIcon = mk('🔗'),
+  FileIcon = mk('▤'), LinkIcon = mk('🔗'), EditIcon = mk('✎'),
   ChevLeft = mk('‹'), ChevRight = mk('›'), CloseIcon = mk('×'),
   DlIcon = mk('↓'), BanIcon = mk('⊘'), UserIcon = mk('👤'), TagIcon = mk('🏷');
 
@@ -204,6 +217,35 @@ function calcKPIs(tickets) {
   return { onTimeRate, firstPassRate, avgRev, completionPct, incompleteRate, dcRate };
 }
 
+/* ── Email notification helper ─────────────────────────────────────────────── */
+async function sendEmail(subject, message, ticket) {
+  const assigneeName = GRAPHICS.find(g => g.id === ticket?.assignee)?.name || '';
+  const params = {
+    subject,
+    message,
+    to_email:     NOTIFY_EMAIL,
+    ticket_id:    ticket?.jobNo || ticket?.id || '',
+    ticket_title: ticket?.title || '',
+    brand:        ticket?.brand || '',
+    assignee:     assigneeName,
+  };
+  if (window.emailjs && EJS_SERVICE && EJS_TEMPLATE && EJS_PUBLIC) {
+    try { await window.emailjs.send(EJS_SERVICE, EJS_TEMPLATE, params, EJS_PUBLIC); }
+    catch (err) { console.warn('[EmailJS] ส่งไม่สำเร็จ:', err); }
+  } else {
+    console.info('[Notify]', subject, params);
+  }
+}
+
+/* ── Sort helpers ──────────────────────────────────────────────────────────── */
+function sortByPriorityDate(list) {
+  return [...list].sort((a, b) => {
+    const pa = a.priority || 99, pb = b.priority || 99;
+    if (pa !== pb) return pa - pb;
+    return (a.dueDate || Infinity) - (b.dueDate || Infinity);
+  });
+}
+
 /* ── Sub-components ─────────────────────────────────────────────────────────── */
 function WorkloadBar({ hours }) {
   const pct = Math.min(hours / 8 * 100, 100);
@@ -255,16 +297,25 @@ function KPICard({ title, value, target, unit = '%', higherGood = true, monitorO
   );
 }
 
-function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
-  const [link,         setLink]         = useState('');
-  const [fb,           setFb]           = useState('');
-  const [fbError,      setFbError]      = useState('');
-  const [rejectReason, setRejectReason] = useState('');
-  const [cardUpload,   setCardUpload]   = useState(null); // null | number | 'done' | 'error'
+/* viewMode: 'requester' | 'graphic' | 'all'
+   'requester' — เห็น Approve/Reject/Edit, ไม่เห็น Start/Pause/Reject Brief
+   'graphic'   — เห็น Start/Pause/ส่งตรวจ/ขอเลื่อน, ไม่เห็น Approve Final
+   'all'       — เห็นทุกอย่าง (ค่า default สำหรับ backwards-compat)
+*/
+function TicketCard({ ticket, onAction, now, viewMode = 'all', onEdit }) {
+  const [link,        setLink]        = useState('');
+  const [fb,          setFb]          = useState('');
+  const [fbError,     setFbError]     = useState('');
+  const [rejectReason,setRejectReason]= useState('');
+  const [cardUpload,  setCardUpload]  = useState(null);
+  const [showExt,     setShowExt]     = useState(false);
+  const [extReason,   setExtReason]   = useState('');
+  const [extDate,     setExtDate]     = useState('');
   const cardFileRef = useRef(null);
 
-  useEffect(() => { setLink(ticket.attachment || ''); },          [ticket.attachment]);
+  useEffect(() => { setLink(ticket.attachment || ''); }, [ticket.attachment]);
   useEffect(() => { setFb(ticket.feedback || ''); setFbError(''); }, [ticket.feedback, ticket.status]);
+  useEffect(() => { setRejectReason(''); setShowExt(false); setExtReason(''); setExtDate(''); }, [ticket.status]);
 
   const handleCardFile = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -278,9 +329,7 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
     fd.append('upload_preset', CLOUDINARY_PRESET);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`);
-    xhr.upload.onprogress = (ev) => {
-      if (ev.lengthComputable) setCardUpload(Math.round(ev.loaded / ev.total * 100));
-    };
+    xhr.upload.onprogress = ev => { if (ev.lengthComputable) setCardUpload(Math.round(ev.loaded/ev.total*100)); };
     xhr.onload = () => {
       try {
         const res = JSON.parse(xhr.responseText);
@@ -291,7 +340,6 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
     xhr.onerror = () => setCardUpload('error');
     xhr.send(fd);
   }, []);
-  useEffect(() => { setRejectReason(''); },                       [ticket.status]);
 
   const sla          = getSla(ticket.slaType);
   const liveTime     = ticket.status === 'Doing' && ticket.startedAt
@@ -300,10 +348,18 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
   const isLate       = ticket.dueDate && now > ticket.dueDate && ticket.status !== 'Done';
   const pConf        = PC[ticket.priority] || PC[3];
   const assigneeName = GRAPHICS.find(g => g.id === ticket.assignee)?.name || '-';
+  const hasPendingExt = ticket.extensionRequest?.status === 'pending';
+  const isGraphic    = viewMode === 'graphic' || viewMode === 'all';
+  const isRequester  = viewMode === 'requester' || viewMode === 'all';
 
   return (
     <div className={`bg-white rounded-3xl border p-6 shadow-sm hover:shadow-md transition-shadow
-      ${ticket.status === 'IncompleteRejected' ? 'border-orange-300' : isLate ? 'border-red-400' : ticket.priority === 1 ? 'border-red-300' : 'border-slate-200'}`}>
+      ${ticket.status === 'IncompleteRejected' ? 'border-orange-300'
+        : ticket.status === 'Doing'  ? 'border-blue-300'
+        : ticket.status === 'Paused' ? 'border-amber-300'
+        : isLate ? 'border-red-400'
+        : ticket.priority === 1 ? 'border-red-300'
+        : 'border-slate-200'}`}>
 
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
@@ -311,9 +367,13 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
           <div className="flex flex-wrap gap-1.5 mb-3">
             <span className={`px-2.5 py-1 rounded-full text-white text-[10px] font-bold ${brandColor(ticket.brand)}`}>{ticket.brand}</span>
             <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold ${pConf.bg} ${pConf.color}`}>{pConf.label}</span>
+            {ticket.status === 'Doing'      && <span className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">▶ กำลังทำ</span>}
+            {ticket.status === 'Paused'     && <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold">⏸ พักงาน</span>}
+            {ticket.status === 'Reviewing'  && <span className="px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-[10px] font-bold">👁 รอตรวจ</span>}
             {ticket.isDirectionChange && <span className="px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-[10px] font-bold">⚑ Direction Change</span>}
             {ticket.status === 'IncompleteRejected' && <span className="px-2.5 py-1 rounded-full bg-orange-50 border border-orange-200 text-orange-700 text-[10px] font-bold">⊘ Brief ไม่ครบ</span>}
             {isLate && <span className="px-2.5 py-1 rounded-full bg-red-50 border border-red-300 text-red-700 text-[10px] font-bold">⚠ เลย Deadline</span>}
+            {hasPendingExt && <span className="px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-bold">📆 ขอเลื่อน</span>}
           </div>
           <h3 className="font-black text-slate-900 leading-tight">{ticket.title}</h3>
           {ticket.jobNo && <div className="text-[10px] text-slate-400 mt-0.5">{ticket.jobNo}</div>}
@@ -327,13 +387,18 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
             </div>
           )}
         </div>
-        <button
-          onClick={() => { if (window.confirm(`ลบ ticket "${ticket.title}"?`)) onAction(ticket.id, 'delete'); }}
-          aria-label="ลบ ticket"
-          className="text-slate-300 hover:text-red-500 shrink-0"
-        >
-          <CloseIcon className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {isRequester && onEdit && ticket.status !== 'Done' && (
+            <button onClick={() => onEdit(ticket)} title="แก้ไข Ticket"
+              className="text-slate-300 hover:text-blue-500 px-1 text-base">
+              <EditIcon />
+            </button>
+          )}
+          <button onClick={() => { if (window.confirm(`ลบ ticket "${ticket.title}"?`)) onAction(ticket.id, 'delete'); }}
+            aria-label="ลบ ticket" className="text-slate-300 hover:text-red-500">
+            <CloseIcon />
+          </button>
+        </div>
       </div>
 
       {/* Brief Summary */}
@@ -352,61 +417,41 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
         </div>
       )}
 
-      {ticket.status === 'Doing' && (
+      {/* File upload (Graphic / Doing only) */}
+      {ticket.status === 'Doing' && isGraphic && (
         <div className="mt-4 space-y-2">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">Final Artwork — แนบไฟล์หรือลิงก์</label>
-
-          {/* Upload zone */}
-          <div
-            onClick={() => cardFileRef.current?.click()}
+          <div onClick={() => cardFileRef.current?.click()}
             onDragOver={e => e.preventDefault()}
-            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCardFile({ target:{ files: e.dataTransfer.files } }); }}
-            className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 hover:border-blue-300 transition bg-slate-50 px-4 py-4 text-center"
-          >
+            onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) handleCardFile({ target:{ files: e.dataTransfer.files } }); }}
+            className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 hover:border-blue-300 transition bg-slate-50 px-4 py-4 text-center">
             <input ref={cardFileRef} type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={handleCardFile} />
-            {cardUpload === null && !link && (
-              <div className="text-xs text-slate-400">
-                <span className="text-lg">📎</span><br/>
-                ลากไฟล์มาวาง หรือคลิกเพื่อเลือก · JPG, PNG, PDF ≤ 20MB
-              </div>
-            )}
+            {cardUpload === null && !link && <div className="text-xs text-slate-400"><span className="text-lg">📎</span><br/>ลากไฟล์มาวาง หรือคลิกเพื่อเลือก · JPG, PNG, PDF ≤ 20MB</div>}
             {typeof cardUpload === 'number' && (
               <div>
                 <div className="text-xs font-bold text-blue-600 mb-1.5">กำลังอัปโหลด {cardUpload}%</div>
-                <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                  <div className="h-full bg-blue-500 rounded-full" style={{ width:`${cardUpload}%` }} />
-                </div>
+                <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-blue-500 rounded-full" style={{ width:`${cardUpload}%` }} /></div>
               </div>
             )}
             {cardUpload === 'done' && link && (
               <div className="flex items-center justify-center gap-2 text-green-700 text-xs">
                 <span>✓ อัปโหลดสำเร็จ</span>
                 <a href={link} target="_blank" rel="noreferrer" className="underline text-blue-600" onClick={e => e.stopPropagation()}>ดูไฟล์</a>
-                <button type="button" className="text-slate-400 hover:text-red-500 underline"
-                  onClick={e => { e.stopPropagation(); setLink(''); setCardUpload(null); }}>ลบ</button>
+                <button type="button" className="text-slate-400 hover:text-red-500 underline" onClick={e => { e.stopPropagation(); setLink(''); setCardUpload(null); }}>ลบ</button>
               </div>
             )}
             {cardUpload === 'error' && <div className="text-red-500 text-xs font-bold">⚠ อัปโหลดไม่สำเร็จ — กดเพื่อลองใหม่</div>}
           </div>
-
-          {/* OR link */}
-          <div className="flex items-center gap-2">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="text-[10px] text-slate-400 font-bold">หรือ</span>
-            <div className="flex-1 h-px bg-slate-200" />
-          </div>
-          <input
-            value={cardUpload === 'done' ? '' : link}
-            onChange={e => { setLink(e.target.value); setCardUpload(null); }}
-            placeholder="วาง Google Drive / Figma link..."
-            disabled={cardUpload === 'done'}
-            className="w-full rounded-2xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400"
-          />
+          <div className="flex items-center gap-2"><div className="flex-1 h-px bg-slate-200" /><span className="text-[10px] text-slate-400 font-bold">หรือ</span><div className="flex-1 h-px bg-slate-200" /></div>
+          <input value={cardUpload === 'done' ? '' : link} onChange={e => { setLink(e.target.value); setCardUpload(null); }}
+            placeholder="วาง Google Drive / Figma link..." disabled={cardUpload === 'done'}
+            className="w-full rounded-2xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400" />
           {link && cardUpload !== 'done' && !validLink(link) && <p className="text-xs text-red-500">ต้องขึ้นต้นด้วย http:// หรือ https://</p>}
         </div>
       )}
 
-      {ticket.status === 'Waiting' && (
+      {/* Reject brief reason (Graphic / Waiting only) */}
+      {ticket.status === 'Waiting' && isGraphic && (
         <div className="mt-4 space-y-1">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-orange-400">เหตุผลปฏิเสธ Brief ไม่ครบ (กรอกก่อนกด ปฏิเสธ)</label>
           <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
@@ -415,12 +460,14 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
         </div>
       )}
 
+      {/* Attachment link */}
       {ticket.attachment && ticket.status !== 'Doing' && (
         <div className="mt-3 text-sm">
           <a href={ticket.attachment} target="_blank" rel="noreferrer" className="text-blue-600 underline break-all">ดูงานที่ส่ง →</a>
         </div>
       )}
 
+      {/* Meta grid */}
       <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
           <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-1">Target Date</div>
@@ -429,20 +476,19 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
         </div>
         <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
           <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-1">Report</div>
-          {ticket.reportLink
-            ? <a href={ticket.reportLink} target="_blank" rel="noreferrer" className="font-bold text-blue-600 underline break-all">เปิด report</a>
-            : <div className="font-bold text-slate-400">ยังไม่มี</div>}
+          {ticket.reportLink ? <a href={ticket.reportLink} target="_blank" rel="noreferrer" className="font-bold text-blue-600 underline break-all">เปิด report</a> : <div className="font-bold text-slate-400">ยังไม่มี</div>}
         </div>
         <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
           <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-1">Requester</div>
           <div className="font-bold text-slate-700">{ticket.requester || '-'}</div>
         </div>
         <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
-          <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-1">Approver</div>
-          <div className="font-bold text-slate-700">{ticket.approverName || '-'}</div>
+          <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-1">Assignee</div>
+          <div className="font-bold text-slate-700">{assigneeName}</div>
         </div>
       </div>
 
+      {/* Timer */}
       <div className="flex items-center justify-between mt-4 text-sm">
         <div className="flex items-center gap-2">
           <ClockIcon className="w-4 h-4 text-slate-400" />
@@ -450,73 +496,144 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
           <span className="text-slate-400">/ SLA {fmtH(ticket.standardHours)}</span>
           {overSla && <span className="text-xs text-red-500 font-bold">⚠ เกิน SLA</span>}
         </div>
-        <span className="text-xs text-slate-500">{assigneeName} · Rev {ticket.revisions}x</span>
+        <span className="text-xs text-slate-500">Rev {ticket.revisions}x</span>
       </div>
 
-      {ticket.status === 'Reviewing' && (
+      {/* Feedback box (Reviewing only, Requester fills in) */}
+      {ticket.status === 'Reviewing' && isRequester && (
         <div className="mt-4 space-y-1">
           <label className={`block text-[10px] font-bold uppercase tracking-widest ${fbError ? 'text-red-500' : 'text-slate-400'}`}>
             Feedback / เหตุผล <span className="text-red-500">*</span> จำเป็นสำหรับ Reject
           </label>
-          <textarea
-            value={fb}
-            onChange={e => { setFb(e.target.value); if (e.target.value.trim()) setFbError(''); }}
-            rows={3}
+          <textarea value={fb} onChange={e => { setFb(e.target.value); if (e.target.value.trim()) setFbError(''); }} rows={3}
             placeholder="ระบุ อะไร / ที่ไหน / แก้เป็นอะไร — เช่น: headline บรรทัดแรก เปลี่ยนจาก 'Healthy' → 'สุขภาพดี'"
-            className={`w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 ${fbError ? 'border-red-400 focus:ring-red-100 bg-red-50' : 'border-slate-200 focus:ring-blue-100'}`}
-          />
+            className={`w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 ${fbError ? 'border-red-400 focus:ring-red-100 bg-red-50' : 'border-slate-200 focus:ring-blue-100'}`} />
           {fbError && <p className="text-xs text-red-600 font-bold">{fbError}</p>}
           <p className="text-[10px] text-slate-400">รวม feedback จากทุก stakeholder ก่อนส่ง · ห้ามทยอยส่งหลายรอบ</p>
         </div>
       )}
 
-      {ticket.feedback && (
+      {/* Previous feedback display */}
+      {ticket.feedback && ticket.status !== 'Reviewing' && (
         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <span className="font-bold">Feedback:</span> {ticket.feedback}
         </div>
       )}
 
+      {/* Extension request — display & respond */}
+      {ticket.extensionRequest && (
+        <div className={`mt-3 rounded-2xl border p-4 text-sm ${
+          ticket.extensionRequest.status === 'pending'  ? 'border-indigo-200 bg-indigo-50' :
+          ticket.extensionRequest.status === 'approved' ? 'border-green-200 bg-green-50' :
+          'border-slate-200 bg-slate-50'}`}>
+          <div className="font-bold text-slate-800 mb-1 flex items-center gap-2">
+            <span>📆 ขอเลื่อน Deadline</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+              ticket.extensionRequest.status === 'pending'  ? 'bg-indigo-100 text-indigo-700' :
+              ticket.extensionRequest.status === 'approved' ? 'bg-green-100 text-green-700' :
+              'bg-slate-100 text-slate-500'}`}>
+              {ticket.extensionRequest.status === 'pending' ? '⏳ รออนุมัติ' : ticket.extensionRequest.status === 'approved' ? '✓ อนุมัติ' : '✗ ไม่อนุมัติ'}
+            </span>
+          </div>
+          <div className="text-xs text-slate-700">{ticket.extensionRequest.reason}</div>
+          {ticket.extensionRequest.newDate && (
+            <div className="text-xs text-slate-500 mt-1">วันที่ขอใหม่: {fmtDate(new Date(ticket.extensionRequest.newDate + 'T18:00:00').getTime())}</div>
+          )}
+          {isRequester && ticket.extensionRequest.status === 'pending' && (
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => onAction(ticket.id, 'approve_extension', { newDate: ticket.extensionRequest.newDate })}
+                className="flex-1 rounded-xl bg-green-600 text-white py-2 text-xs font-bold">✓ อนุมัติเลื่อน</button>
+              <button onClick={() => onAction(ticket.id, 'reject_extension')}
+                className="flex-1 rounded-xl bg-rose-500 text-white py-2 text-xs font-bold">✗ ไม่อนุมัติ</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Request extension form (Graphic, no pending) */}
+      {isGraphic && !hasPendingExt && ['Waiting','Doing','Paused'].includes(ticket.status) && (
+        <div className="mt-3">
+          {!showExt ? (
+            <button onClick={() => setShowExt(true)}
+              className="w-full rounded-2xl border border-indigo-200 text-indigo-600 py-2.5 text-xs font-bold hover:bg-indigo-50 transition">
+              📆 ขอเลื่อน Deadline
+            </button>
+          ) : (
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+              <div className="text-xs font-bold text-indigo-700 uppercase tracking-widest">ขอเลื่อน Deadline</div>
+              <div>
+                <label className="block text-[10px] font-bold text-indigo-600 mb-1">เหตุผล <span className="text-red-500">*</span></label>
+                <textarea value={extReason} onChange={e => setExtReason(e.target.value)} rows={2}
+                  placeholder="ระบุสาเหตุที่ต้องการเลื่อน..."
+                  className="w-full rounded-xl border border-indigo-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100 bg-white" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-indigo-600 mb-1">วันที่ขอเลื่อนถึง (ถ้ามี)</label>
+                <input type="date" value={extDate} onChange={e => setExtDate(e.target.value)} min={minWorkdayStr()}
+                  className="w-full rounded-xl border border-indigo-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100 bg-white" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => {
+                    if (!extReason.trim()) { alert('กรุณาระบุเหตุผลก่อนส่ง'); return; }
+                    onAction(ticket.id, 'request_extension', { reason: extReason, newDate: extDate || null });
+                    setShowExt(false); setExtReason(''); setExtDate('');
+                  }}
+                  className="flex-1 rounded-xl bg-indigo-600 text-white py-2 text-xs font-bold">ส่งคำขอ</button>
+                <button onClick={() => { setShowExt(false); setExtReason(''); setExtDate(''); }}
+                  className="px-4 rounded-xl border border-indigo-200 text-indigo-600 py-2 text-xs font-bold">ยกเลิก</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Action buttons */}
       <div className="flex flex-wrap gap-2 mt-5">
-        {ticket.status === 'Waiting' && <>
+        {/* Graphic actions */}
+        {ticket.status === 'Waiting' && isGraphic && <>
           <button onClick={() => onAction(ticket.id, 'start')}
             className="flex-1 rounded-2xl bg-slate-900 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <PlayIcon className="w-3 h-3" /> Start
+            <PlayIcon /> Start
           </button>
-          <button onClick={() => {
-              if (!rejectReason.trim()) { alert('ระบุเหตุผลก่อนปฏิเสธ'); return; }
-              onAction(ticket.id, 'reject_incomplete', { rejectReason });
-            }}
+          <button onClick={() => { if (!rejectReason.trim()) { alert('ระบุเหตุผลก่อนปฏิเสธ'); return; } onAction(ticket.id, 'reject_incomplete', { rejectReason }); }}
             className="flex-1 rounded-2xl bg-orange-500 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <BanIcon className="w-3 h-3" /> ปฏิเสธ – Brief ไม่ครบ
+            <BanIcon /> ปฏิเสธ Brief ไม่ครบ
           </button>
         </>}
-        {ticket.status === 'Paused' && (
+
+        {ticket.status === 'Paused' && isGraphic && (
           <button onClick={() => onAction(ticket.id, 'start')}
             className="flex-1 rounded-2xl bg-slate-900 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <PlayIcon className="w-3 h-3" /> Resume
+            <PlayIcon /> Resume
           </button>
         )}
-        {ticket.status === 'Doing' && <>
+
+        {ticket.status === 'Doing' && isGraphic && <>
           <button onClick={() => onAction(ticket.id, 'pause')}
             className="flex-1 rounded-2xl bg-amber-500 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <PauseIcon className="w-3 h-3" /> Pause
+            <PauseIcon /> Pause
           </button>
           <button onClick={() => onAction(ticket.id, 'send_to_review', { attachment: link })}
             className="flex-1 rounded-2xl bg-green-600 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <EyeIcon className="w-3 h-3" /> ส่งตรวจ
+            <EyeIcon /> ส่งตรวจ
           </button>
         </>}
-        {ticket.status === 'Reviewing' && <>
+
+        {/* Graphic sees "waiting" badge when ticket is in review */}
+        {ticket.status === 'Reviewing' && !isRequester && isGraphic && (
+          <div className="w-full rounded-2xl bg-purple-50 border border-purple-200 text-purple-600 py-3 text-xs font-bold text-center">
+            👁 รอ Requester ตรวจงาน
+          </div>
+        )}
+
+        {/* Requester actions */}
+        {ticket.status === 'Reviewing' && isRequester && <>
           <button onClick={() => onAction(ticket.id, 'approve', { feedback: fb })}
             className="flex-1 rounded-2xl bg-green-600 text-white py-3 text-xs font-bold uppercase flex items-center justify-center gap-1">
-            <CheckIcon className="w-3 h-3" /> Approve
+            <CheckIcon /> Approve
           </button>
-          <button
-            onClick={() => {
-              if (!fb.trim()) {
-                setFbError('⚠ กรุณาระบุเหตุผลก่อน Reject');
-                return;
-              }
+          <button onClick={() => {
+              if (!fb.trim()) { setFbError('⚠ กรุณาระบุเหตุผลก่อน Reject'); return; }
               setFbError('');
               onAction(ticket.id, 'reject', { feedback: fb });
             }}
@@ -524,6 +641,7 @@ function TicketCard({ ticket, onAction, showReviewFields = false, now }) {
             Reject – แก้ใหม่
           </button>
         </>}
+
         {ticket.status === 'IncompleteRejected' && (
           <div className="w-full rounded-2xl bg-orange-50 border border-orange-200 text-orange-600 py-3 text-xs font-bold text-center">
             รอผู้สั่งงานเพิ่มข้อมูลที่ขาด
@@ -786,16 +904,197 @@ function DashboardSection({ theme, tickets, filterBrand, onExport }) {
   );
 }
 
+/* ── EditTicketModal ────────────────────────────────────────────────────────── */
+function EditTicketModal({ ticket, onSave, onClose }) {
+  const [form, setForm] = useState({
+    title:        ticket.title        || '',
+    brand:        ticket.brand        || '',
+    slaType:      ticket.slaType      || '',
+    priority:     ticket.priority     || 3,
+    objective:    ticket.objective    || '',
+    platform:     ticket.platform     || '',
+    sizeFormat:   ticket.sizeFormat   || '',
+    copyText:     ticket.copyText     || '',
+    constraints:  ticket.constraints  || '',
+    requester:    ticket.requester    || '',
+    approverName: ticket.approverName || '',
+    assignee:     ticket.assignee     || '',
+    dueDate:      fmtDateInput(ticket.dueDate) || '',
+    reportLink:   ticket.reportLink   || '',
+    jobCategory:  ticket.jobCategory  || '',
+  });
+
+  const handleSave = (e) => {
+    e.preventDefault();
+    if (!form.title.trim())      { alert('กรุณาระบุชื่องาน'); return; }
+    if (!form.brand)             { alert('กรุณาเลือก Brand'); return; }
+    if (!form.assignee)          { alert('กรุณาเลือก Graphic Queue'); return; }
+    if (!form.slaType)           { alert('กรุณาเลือก ประเภทงาน'); return; }
+    if (!form.jobCategory)       { alert('กรุณาเลือก หมวดหมู่งาน'); return; }
+    if (!form.objective.trim())  { alert('กรุณาระบุ Objective'); return; }
+    if (!form.sizeFormat.trim()) { alert('กรุณาระบุขนาด / Format'); return; }
+    const dueDateMs = form.dueDate
+      ? (() => { const d = new Date(form.dueDate); d.setHours(18,0,0,0); return d.getTime(); })()
+      : ticket.dueDate;
+    const sla = getSla(form.slaType);
+    onSave(ticket.id, {
+      title:        form.title.trim(),
+      brand:        form.brand,
+      slaType:      form.slaType,
+      standardHours: sla.stdHours,
+      minHours:     sla.minHours,
+      priority:     form.priority,
+      objective:    form.objective.trim(),
+      platform:     form.platform     || null,
+      sizeFormat:   form.sizeFormat.trim(),
+      copyText:     form.copyText     || null,
+      constraints:  form.constraints  || null,
+      requester:    form.requester,
+      approverName: form.approverName || null,
+      assignee:     form.assignee,
+      dueDate:      dueDateMs,
+      reportLink:   form.reportLink   || null,
+      jobCategory:  form.jobCategory,
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between rounded-t-3xl z-10">
+          <div>
+            <div className="font-black text-xl">แก้ไข Ticket</div>
+            <div className="text-xs text-slate-400 mt-0.5">{ticket.jobNo || ticket.id}</div>
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-2xl border border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700"><CloseIcon /></button>
+        </div>
+        <form onSubmit={handleSave} className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">ชื่องาน <span className="text-red-500">*</span></label>
+            <input value={form.title} onChange={e => setForm(f => ({...f, title:e.target.value}))} required
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Brand <span className="text-red-500">*</span></label>
+              <select value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                <option value="">— กรุณาเลือก —</option>
+                {BRANDS.filter(b => b.name !== 'All Brands').map(b => <option key={b.name}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Graphic Queue <span className="text-red-500">*</span></label>
+              <select value={form.assignee} onChange={e => setForm(f => ({...f, assignee:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                <option value="">— กรุณาเลือก —</option>
+                {GRAPHICS.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ประเภทงาน (SLA) <span className="text-red-500">*</span></label>
+              <select value={form.slaType} onChange={e => setForm(f => ({...f, slaType:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                <option value="">— กรุณาเลือก —</option>
+                {SLA_TYPES.map(s => <option key={s.type} value={s.type}>{s.type}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">หมวดหมู่งาน <span className="text-red-500">*</span></label>
+              <select value={form.jobCategory} onChange={e => setForm(f => ({...f, jobCategory:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                <option value="">— กรุณาเลือก —</option>
+                {JOB_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-2">Priority Level</label>
+            <div className="grid grid-cols-4 gap-2">
+              {[1,2,3,4].map(p => (
+                <label key={p} className={`flex items-center gap-2 rounded-2xl border px-3 py-2 cursor-pointer transition text-xs ${form.priority === p ? `${PC[p].bg} ${PC[p].color} font-bold` : 'bg-white border-slate-200 text-slate-500'}`}>
+                  <input type="radio" name="editPriority" value={p} checked={form.priority === p}
+                    onChange={() => setForm(f => ({...f, priority:p}))} className="sr-only" />
+                  <span className={`w-2 h-2 rounded-full ${PC[p].dot}`} />
+                  {PC[p].label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Target Deadline</label>
+              <input type="date" value={form.dueDate} onChange={e => setForm(f => ({...f, dueDate:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Report Link</label>
+              <input value={form.reportLink} onChange={e => setForm(f => ({...f, reportLink:e.target.value}))} placeholder="https://..."
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Objective <span className="text-red-500">*</span></label>
+            <input value={form.objective} onChange={e => setForm(f => ({...f, objective:e.target.value}))} required
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Platform</label>
+              <input value={form.platform} onChange={e => setForm(f => ({...f, platform:e.target.value}))} placeholder="Facebook, Instagram..."
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ขนาด / Format <span className="text-red-500">*</span></label>
+              <input value={form.sizeFormat} onChange={e => setForm(f => ({...f, sizeFormat:e.target.value}))} required
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">ข้อความ / Copy</label>
+            <textarea value={form.copyText} onChange={e => setForm(f => ({...f, copyText:e.target.value}))} rows={2}
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">ข้อจำกัดพิเศษ</label>
+            <input value={form.constraints} onChange={e => setForm(f => ({...f, constraints:e.target.value}))}
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ชื่อผู้สั่งงาน</label>
+              <input value={form.requester} onChange={e => setForm(f => ({...f, requester:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ผู้อนุมัติ</label>
+              <input value={form.approverName} onChange={e => setForm(f => ({...f, approverName:e.target.value}))}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100" />
+            </div>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="submit" className="flex-1 rounded-2xl bg-red-600 text-white py-3 font-bold">บันทึกการแก้ไข</button>
+            <button type="button" onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-3 font-bold text-slate-600">ยกเลิก</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /* ── Default new job state ──────────────────────────────────────────────────── */
 const defaultNewJob = () => ({
-  title: '', brand: 'Landy Home', slaType: SLA_TYPES[0].type, priority: 3,
+  title: '', brand: '', slaType: '', priority: 3,
   objective: '', platform: '', sizeFormat: '', copyText: '', constraints: '',
-  requester: '', approverName: '', attachment: '', assignee: 'B01',
+  requester: '', approverName: '', attachment: '', assignee: '',
   dueDate: fmtDateInput(nextWorkday(Date.now() + 86400000).getTime()),
   reportLink: '', isDirectionChange: false, parentTicketId: '',
   directorApproved: false,
   urgentReason: '', headApproved: false,
-  jobCategory: JOB_CATEGORIES[0],
+  jobCategory: '',
 });
 
 /* ── Main Component ─────────────────────────────────────────────────────────── */
@@ -812,6 +1111,8 @@ export default function App() {
   const [now,          setNow]       = useState(Date.now());
   const [weekOffset,   setWeek]      = useState(0);
   const [uploadState,  setUpload]    = useState(null); // null | number(%) | 'done' | 'error'
+  const [viewMode,     setViewMode]  = useState('all'); // 'requester' | 'graphic' | 'all'
+  const [editTicket,   setEditTicket]= useState(null);
   const fileInputRef = useRef(null);
 
   const handleFileUpload = useCallback((e) => {
@@ -950,6 +1251,39 @@ export default function App() {
     if (!ticket) return;
     const elapsed   = ticket.startedAt ? Math.floor((Date.now() - ticket.startedAt) / 1000) : 0;
     const ticketRef = doc(db, 'tickets', id);
+
+    /* Extension request actions */
+    if (action === 'request_extension') {
+      await updateDoc(ticketRef, {
+        extensionRequest: {
+          reason:      payload.reason,
+          newDate:     payload.newDate || null,
+          requestedAt: Date.now(),
+          status:      'pending',
+        },
+      });
+      sendEmail('📆 ขอเลื่อน Deadline', `${GRAPHICS.find(g=>g.id===ticket.assignee)?.name||ticket.assignee} ขอเลื่อน Deadline\nเหตุผล: ${payload.reason}${payload.newDate ? `\nวันที่ขอ: ${payload.newDate}` : ''}`, ticket);
+      return;
+    }
+    if (action === 'approve_extension') {
+      const newDueDate = payload.newDate
+        ? (() => { const d = new Date(payload.newDate); d.setHours(18,0,0,0); return d.getTime(); })()
+        : ticket.dueDate;
+      await updateDoc(ticketRef, {
+        dueDate: newDueDate,
+        extensionRequest: { ...ticket.extensionRequest, status: 'approved' },
+      });
+      sendEmail('✓ อนุมัติเลื่อน Deadline', `Deadline ถูกเลื่อนเป็น ${payload.newDate || '-'}`, ticket);
+      return;
+    }
+    if (action === 'reject_extension') {
+      await updateDoc(ticketRef, {
+        extensionRequest: { ...ticket.extensionRequest, status: 'rejected' },
+      });
+      sendEmail('✗ ไม่อนุมัติเลื่อน Deadline', `คำขอเลื่อน Deadline สำหรับ "${ticket.title}" ถูกปฏิเสธ`, ticket);
+      return;
+    }
+
     const updates = (() => {
       switch (action) {
         case 'start':           return { status: 'Doing', startedAt: Date.now() };
@@ -962,6 +1296,16 @@ export default function App() {
       }
     })();
     await updateDoc(ticketRef, updates);
+
+    /* Email notifications */
+    const emailMap = {
+      start:          ['▶ เริ่มงานแล้ว',        `${GRAPHICS.find(g=>g.id===ticket.assignee)?.name||ticket.assignee} เริ่มทำงาน "${ticket.title}"`],
+      pause:          ['⏸ พักงาน',               `"${ticket.title}" ถูกพักชั่วคราว`],
+      send_to_review: ['👁 ส่งตรวจงาน',          `"${ticket.title}" ส่งตรวจแล้ว — กรุณาตรวจภายใน 1 วันทำการ`],
+      approve:        ['✓ อนุมัติงาน (Done)',    `"${ticket.title}" ได้รับการ Approve แล้ว`],
+      reject:         ['↺ Reject – แก้ใหม่',     `"${ticket.title}" ถูก Reject: ${payload.feedback||''}`],
+    };
+    if (emailMap[action]) sendEmail(...emailMap[action], ticket);
   }, [tickets]);
 
   /* ── Deadline validation — ตัดที่ 18:00 ของวันที่เลือก ไม่ใช่ midnight ── */
@@ -993,10 +1337,20 @@ export default function App() {
   }, [tickets, newJob.assignee, newJob.dueDate]);
   const assigneeOverloaded = newJob.dueDate && selectedDateWorkload >= 8;
 
+  /* ── Edit existing ticket ────────────────────────────────────────────────── */
+  const handleEditSave = useCallback(async (id, updates) => {
+    await updateDoc(doc(db, 'tickets', id), updates);
+    sendEmail('✎ แก้ไข Ticket', `Ticket "${updates.title}" ถูกแก้ไขโดย Requester`, updates);
+  }, []);
+
   /* ── Create new ticket ────────────────────────────────────────────────────── */
   const createJob = async (e) => {
     e.preventDefault();
     if (!newJob.title.trim())      { alert('กรุณาระบุชื่องาน'); return; }
+    if (!newJob.brand)             { alert('กรุณาเลือก Brand'); return; }
+    if (!newJob.assignee)          { alert('กรุณาเลือก Graphic Queue'); return; }
+    if (!newJob.slaType)           { alert('กรุณาเลือก ประเภทงาน (SLA)'); return; }
+    if (!newJob.jobCategory)       { alert('กรุณาเลือก หมวดหมู่งาน'); return; }
     if (!newJob.requester.trim())  { alert('กรุณาระบุชื่อผู้สั่งงาน'); return; }
     if (!newJob.objective.trim())  { alert('กรุณาระบุ Objective'); return; }
     if (!newJob.sizeFormat.trim()) { alert('กรุณาระบุขนาด / Format'); return; }
@@ -1047,6 +1401,11 @@ export default function App() {
       jobCategory:    newJob.jobCategory,
     });
 
+    sendEmail(
+      '📋 งานใหม่เข้าคิว',
+      `[${jobNo}] "${newJob.isDirectionChange && newJob.parentTicketId ? `[แก้ไข] #${newJob.parentTicketId} – ${newJob.title}` : newJob.title}" (${newJob.brand} · ${(PC[newJob.priority]||PC[3]).label}) เข้าคิวแล้ว`,
+      { jobNo, title: newJob.title, brand: newJob.brand, assignee: newJob.assignee }
+    );
     setJob(defaultNewJob());
     setUpload(null);
     setTab('graphic');
@@ -1105,6 +1464,19 @@ export default function App() {
               </button>
             );
           })}
+
+          {/* Role / View Mode toggle */}
+          <div className="pt-4 pb-1">
+            <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold px-4 mb-2">Role View</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2 mx-1 flex gap-1">
+            {[['all','ทั้งหมด'],['requester','Requester'],['graphic','Graphic']].map(([mode, label]) => (
+              <button key={mode} onClick={() => setViewMode(mode)}
+                className={`flex-1 rounded-xl py-2 text-[10px] font-bold transition ${viewMode === mode ? 'bg-red-600 text-white shadow' : 'text-slate-500 hover:text-slate-700'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
 
           {/* Quick View shortcuts */}
           <div className="pt-4 pb-1">
@@ -1323,14 +1695,16 @@ export default function App() {
                     <div>
                       <label className="block text-xs font-bold text-slate-600 mb-1">Brand <span className="text-red-500">*</span></label>
                       <select value={newJob.brand} onChange={e => setJob({...newJob, brand:e.target.value})}
-                        className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                        className={`w-full rounded-2xl border px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 ${!newJob.brand ? 'border-red-200 text-slate-400' : 'border-slate-200'}`}>
+                        <option value="">— กรุณาเลือก —</option>
                         {BRANDS.filter(b => b.name !== 'All Brands').map(b => <option key={b.name}>{b.name}</option>)}
                       </select>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 mb-1">Graphic Queue <span className="text-red-500">*</span></label>
                       <select value={newJob.assignee} onChange={e => setJob({...newJob, assignee:e.target.value})}
-                        className={`w-full rounded-2xl border px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 ${assigneeOverloaded ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}>
+                        className={`w-full rounded-2xl border px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 ${assigneeOverloaded ? 'border-red-300 bg-red-50' : !newJob.assignee ? 'border-red-200 text-slate-400' : 'border-slate-200'}`}>
+                        <option value="">— กรุณาเลือก —</option>
                         {GRAPHICS.map(g => {
                           const wl = workloadByGraphic[g.id];
                           return <option key={g.id} value={g.id}>{g.name}{wl?.hours >= 8 ? ' ⚠ งานเต็ม' : wl?.hours >= 6 ? ' · งานหนัก' : ''}</option>;
@@ -1343,7 +1717,8 @@ export default function App() {
                     <div>
                       <label className="block text-xs font-bold text-slate-600 mb-1">ประเภทงาน (SLA) <span className="text-red-500">*</span></label>
                       <select value={newJob.slaType} onChange={e => setJob({...newJob, slaType:e.target.value})}
-                        className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                        className={`w-full rounded-2xl border px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 ${!newJob.slaType ? 'border-red-200 text-slate-400' : 'border-slate-200'}`}>
+                        <option value="">— กรุณาเลือก —</option>
                         {SLA_TYPES.map(s => <option key={s.type} value={s.type}>{s.type}</option>)}
                       </select>
                       {selectedSla.note && <p className="text-xs text-slate-400 mt-1">{selectedSla.note} · std {fmtH(selectedSla.stdHours)} · min {fmtH(selectedSla.minHours)}</p>}
@@ -1369,7 +1744,8 @@ export default function App() {
                   <div>
                     <label className="block text-xs font-bold text-slate-600 mb-1">หมวดหมู่งาน (Job Category) <span className="text-red-500">*</span></label>
                     <select value={newJob.jobCategory} onChange={e => setJob({...newJob, jobCategory:e.target.value})}
-                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:ring-2 focus:ring-red-100">
+                      className={`w-full rounded-2xl border px-4 py-3 outline-none focus:ring-2 focus:ring-red-100 ${!newJob.jobCategory ? 'border-red-200 text-slate-400' : 'border-slate-200'}`}>
+                      <option value="">— กรุณาเลือก —</option>
                       {JOB_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <p className="text-[10px] text-slate-400 mt-1">ใช้สำหรับคำนวณ Monthly KPI Dashboard</p>
@@ -1624,7 +2000,7 @@ export default function App() {
                 <div className="grid gap-5">
                   {reviewTickets.length === 0
                     ? <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400">ยังไม่มีงานรอ review</div>
-                    : reviewTickets.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} showReviewFields now={now} />)
+                    : reviewTickets.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode="requester" now={now} onEdit={setEditTicket} />)
                   }
                 </div>
               </div>
@@ -1633,9 +2009,19 @@ export default function App() {
 
           {/* ── GRAPHIC BOARD ── */}
           {!loading && tab === 'graphic' && (() => {
-            const active = filtered.filter(t => t.status !== 'Done');
-            const p1     = active.filter(t => t.priority === 1);
-            const rest   = active.filter(t => t.priority !== 1);
+            const active  = filtered.filter(t => t.status !== 'Done');
+            const doing   = sortByPriorityDate(active.filter(t => t.status === 'Doing'));
+            const paused  = sortByPriorityDate(active.filter(t => t.status === 'Paused'));
+            const waiting = sortByPriorityDate(active.filter(t => t.status === 'Waiting'));
+            const incomplete = sortByPriorityDate(active.filter(t => t.status === 'IncompleteRejected'));
+            const p1      = sortByPriorityDate(active.filter(t => t.priority === 1));
+
+            const SectionHeader = ({ label, count, accent = 'text-slate-500' }) => count > 0 && (
+              <div className={`text-xs font-bold uppercase tracking-widest ${accent} flex items-center gap-2`}>
+                {label} <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 font-black">{count}</span>
+              </div>
+            );
+
             return (
               <div className="space-y-6">
                 <div className="flex items-end justify-between gap-4 flex-wrap">
@@ -1645,20 +2031,60 @@ export default function App() {
                        quickView === 'graphic' ? `Graphic View · ${GRAPHICS.find(g=>g.id===graphicViewId)?.name}` :
                        'Graphic Board'}
                     </h1>
-                    <p className="text-slate-500 mt-1">เรียงตาม Priority · กด Start เพื่อเริ่มจับเวลา · ปฏิเสธ Brief ไม่ครบได้ที่นี่</p>
+                    <p className="text-slate-500 mt-1">เรียงตาม Priority + Deadline · กด Start เพื่อเริ่มจับเวลา</p>
                   </div>
                 </div>
+
+                {/* P1 Critical banner */}
                 {p1.length > 0 && (
                   <>
-                    <div className="text-xs font-bold uppercase tracking-widest text-red-600">⚠ P1 Critical — จัดการก่อน</div>
+                    <SectionHeader label="⚠ P1 Critical — จัดการก่อน" count={p1.length} accent="text-red-600" />
                     <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-                      {p1.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} now={now} />)}
+                      {p1.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode={viewMode} now={now} onEdit={setEditTicket} />)}
                     </div>
                   </>
                 )}
-                <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-                  {rest.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} now={now} />)}
-                </div>
+
+                {/* Doing */}
+                {doing.length > 0 && (
+                  <>
+                    <SectionHeader label="▶ กำลังทำ" count={doing.length} accent="text-blue-600" />
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                      {doing.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode={viewMode} now={now} onEdit={setEditTicket} />)}
+                    </div>
+                  </>
+                )}
+
+                {/* Paused */}
+                {paused.length > 0 && (
+                  <>
+                    <SectionHeader label="⏸ พักงาน" count={paused.length} accent="text-amber-600" />
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                      {paused.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode={viewMode} now={now} onEdit={setEditTicket} />)}
+                    </div>
+                  </>
+                )}
+
+                {/* Waiting */}
+                {waiting.length > 0 && (
+                  <>
+                    <SectionHeader label="📥 รอเริ่ม" count={waiting.length} accent="text-slate-500" />
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                      {waiting.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode={viewMode} now={now} onEdit={setEditTicket} />)}
+                    </div>
+                  </>
+                )}
+
+                {/* Incomplete / Rejected */}
+                {incomplete.length > 0 && (
+                  <>
+                    <SectionHeader label="⊘ Brief ไม่ครบ" count={incomplete.length} accent="text-orange-600" />
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                      {incomplete.map(t => <TicketCard key={t.id} ticket={t} onAction={onAction} viewMode={viewMode} now={now} onEdit={setEditTicket} />)}
+                    </div>
+                  </>
+                )}
+
                 {active.length === 0 && (
                   <div className="bg-white rounded-3xl border border-slate-200 p-16 text-center">
                     <div className="text-4xl mb-4">📭</div>
@@ -1679,6 +2105,15 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* ── Edit Ticket Modal ── */}
+      {editTicket && (
+        <EditTicketModal
+          ticket={editTicket}
+          onSave={handleEditSave}
+          onClose={() => setEditTicket(null)}
+        />
+      )}
     </div>
   );
 }
