@@ -327,8 +327,10 @@ function TicketCard({ ticket, onAction, now, viewMode = 'all', onEdit }) {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('upload_preset', CLOUDINARY_PRESET);
+    // PDF ต้องใช้ 'raw' resource type เพื่อให้เปิดได้สาธารณะ, รูปภาพใช้ 'image'
+    const resType = file.type === 'application/pdf' ? 'raw' : 'image';
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`);
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/${resType}/upload`);
     xhr.upload.onprogress = ev => { if (ev.lengthComputable) setCardUpload(Math.round(ev.loaded/ev.total*100)); };
     xhr.onload = () => {
       try {
@@ -1145,8 +1147,10 @@ export default function App() {
     const fd = new FormData();
     fd.append('file',         file);
     fd.append('upload_preset', CLOUDINARY_PRESET);
+    // PDF ต้องใช้ 'raw' resource type เพื่อให้เปิดได้สาธารณะ, รูปภาพใช้ 'image'
+    const resType = file.type === 'application/pdf' ? 'raw' : 'image';
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`);
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/${resType}/upload`);
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable) setUpload(Math.round(ev.loaded / ev.total * 100));
     };
